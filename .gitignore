@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.ovn
+*.ovni
+*.wal
+*.idx.*
+*.compact
+/tmp/
+.env
+.env.local
+package-lock.json
+package-local.json

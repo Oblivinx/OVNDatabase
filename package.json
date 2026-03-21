@@ -1,0 +1,69 @@
+{
+  "name": "ovndb",
+  "version": "1.1.0",
+  "description": "High-performance embedded NoSQL database \u2014 B+ Tree, WAL, LRU Cache, AES-256-GCM. Built for 120k+ user WhatsApp bots.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./collection-v2": {
+      "import": "./dist/collection-v2.js",
+      "types": "./dist/collection-v2.d.ts"
+    },
+    "./crypto": {
+      "import": "./dist/crypto/crypto-layer.js",
+      "types": "./dist/crypto/crypto-layer.d.ts"
+    },
+    "./relations": {
+      "import": "./dist/relations/relation-manager.js",
+      "types": "./dist/relations/relation-manager.d.ts"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.js.map",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:watch": "tsc -p tsconfig.build.json --watch",
+    "build:full": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "test": "npm run build:full && OVNDB_LOG=silent node dist/test/basic.test.js",
+    "test:crypto": "npm run build:full && OVNDB_LOG=silent node dist/test/crypto.test.js",
+    "test:stress": "npm run build:full && OVNDB_LOG=silent node dist/test/stress.test.js",
+    "test:all": "npm run build:full && OVNDB_LOG=silent node dist/test/basic.test.js && OVNDB_LOG=silent node dist/test/crypto.test.js && OVNDB_LOG=silent node dist/test/v1_1.test.js",
+    "demo": "npm run build:full && OVNDB_LOG=silent node dist/examples/whatsapp-bot-demo.js",
+    "benchmark": "npm run build:full && OVNDB_LOG=silent node dist/examples/million-data-benchmark.js",
+    "prepublishOnly": "npm run typecheck && npm run build",
+    "test:v1_1": "npm run build:full && OVNDB_LOG=silent node dist/test/v1_1.test.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "nosql",
+    "database",
+    "embedded",
+    "btree",
+    "wal",
+    "whatsapp-bot",
+    "ovn",
+    "typescript",
+    "aes-256-gcm",
+    "lru"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}
