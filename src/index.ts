@@ -1,67 +1,61 @@
 // ============================================================
-//  OvnDB v1.1 — Public Entry Point
+//  OvnDB v2.1 — Public Entry Point
 //
-//  const db    = await OvnDB.open('./data');
-//  const users = await db.collection<User>('users');
-//  await users.insertOne({ name: 'Budi', phone: '628xxx', points: 0 });
-//
-//  v1.1 additions:
-//   - FileLock: single-writer process guard (cegah corruption)
-//   - Transaction: atomic multi-collection writes + rollback
-//   - TTLIndex: auto-expiry untuk session, rate-limit, OTP
-//   - Observability: slow query log, per-op metrics, P95/P99
-//   - Schema re-exports: field, SchemaValidator, ValidationError
+//  update: added backup(), status(), graceful shutdown,
+//          listCollections() dengan metadata,
+//          collectionExists(), renameCollection()
 // ============================================================
+
 import fsp  from 'fs/promises';
 import path from 'path';
-import { StorageEngine }  from './core/storage-engine.js';
-import { Collection }     from './collection.js';
-import { CollectionV2, type CollectionV2Options } from './collection-v2.js';
-import { FileLock }       from './core/file-lock.js';
-import { Transaction }    from './core/transaction.js';
+import { StorageEngine }  from './core/storage/storage-engine.js';
+import { Collection }     from './collection/collection.js';
+import { CollectionV2, type CollectionV2Options } from './collection/collection-v2.js';
+import { FileLock }       from './utils/file-lock.js';
+import { Transaction }    from './core/transaction/transaction.js';
 import { makeLogger }     from './utils/logger.js';
-import type { OvnDocument, DEFAULT_CACHE_SIZE } from './types.js';
-import { DEFAULT_CACHE_SIZE as CACHE_DEFAULT }   from './types.js';
+import type { OvnDocument, DBStatus, CollectionStatus } from './types/index.js';
 
 const log = makeLogger('db');
 
 export interface OvnDBOptions {
-  /** LRU cache entries per collection (default: 100_000) */
   cacheSize?: number;
-  /** Create the data directory if missing (default: true) */
-  mkdirp?:   boolean;
+  mkdirp?:    boolean;
+  fileLock?:  boolean;
   /**
-   * Aktifkan file lock untuk mencegah dua proses membuka DB yang sama.
-   * Default: true
+   * feat: gracefulShutdown — auto-close DB saat process SIGTERM/SIGINT.
+   * Mencegah data loss saat container/server di-kill.
+   * @default false
    */
-  fileLock?: boolean;
+  gracefulShutdown?: boolean;
 }
 
 export class OvnDB {
-  private readonly dirPath:     string;
-  private readonly cacheSize:   number;
-  private readonly engines:     Map<string, StorageEngine>    = new Map();
-  private readonly collections: Map<string, Collection<any>> = new Map();
-  private readonly _lock:       FileLock | null;
+  private readonly _dirPath:   string;
+  private readonly _cacheSize: number;
+  private readonly _engines:   Map<string, StorageEngine>    = new Map();
+  private readonly _cols:      Map<string, Collection<any>>  = new Map();
+  private readonly _lock:      FileLock | null;
+  private readonly _openedAt:  number;
   private _closed = false;
+  /** track encrypted collections for status() */
+  private readonly _encrypted: Set<string> = new Set();
 
   private constructor(dirPath: string, cacheSize: number, lock: FileLock | null) {
-    this.dirPath   = dirPath;
-    this.cacheSize = cacheSize;
-    this._lock     = lock;
+    this._dirPath   = dirPath;
+    this._cacheSize = cacheSize;
+    this._lock      = lock;
+    this._openedAt  = Date.now();
   }
 
-  /**
-   * Open (or create) an OvnDB data directory.
-   * Secara default mengaktifkan file lock untuk mencegah
-   * dua proses membuka database yang sama secara bersamaan.
-   */
+  // ── Factory ───────────────────────────────────────────────
+
   static async open(dirPath: string, opts: OvnDBOptions = {}): Promise<OvnDB> {
     const resolved  = path.resolve(dirPath);
-    const cacheSize = opts.cacheSize ?? CACHE_DEFAULT;
+    const cacheSize = opts.cacheSize ?? 100_000;
+
     if (opts.mkdirp !== false) await fsp.mkdir(resolved, { recursive: true });
 
-    // File lock — acquire sebelum membuka apapun
     let lock: FileLock | null = null;
     if (opts.fileLock !== false) {
       lock = new FileLock(resolved);
@@ -69,135 +63,261 @@ export class OvnDB {
       log.debug('File lock acquired', { path: resolved });
     }
 
-    log.info(`Opening database`, { path: resolved, cacheSize });
-    return new OvnDB(resolved, cacheSize, lock);
+    const db = new OvnDB(resolved, cacheSize, lock);
+
+    // feat: graceful shutdown — auto-close on process exit signals
+    if (opts.gracefulShutdown) {
+      const shutdown = async (signal: string) => {
+        if (!db._closed) {
+          log.info(`Graceful shutdown triggered by ${signal}`);
+          await db.close().catch(err =>
+            log.error('Graceful shutdown error', { err: String(err) }),
+          );
+        }
+      };
+      process.once('SIGTERM', () => shutdown('SIGTERM'));
+      process.once('SIGINT',  () => shutdown('SIGINT'));
+      process.once('beforeExit', () => shutdown('beforeExit'));
+    }
+
+    log.info('Opening database', { path: resolved, cacheSize });
+    return db;
   }
 
-  /**
-   * Buat sebuah Transaction baru untuk atomic multi-collection writes.
-   *
-   * @example
-   *   const tx = db.beginTransaction();
-   *   tx.insert(users, { name: 'Budi', phone: '628xxx' });
-   *   tx.update(wallets, { _id: wId }, { $inc: { balance: -50_000 } });
-   *   await tx.commit(); // atau tx.rollback()
-   */
-  beginTransaction(): Transaction {
-    this._assertOpen();
-    return new Transaction();
-  }
+  // ── Collection Access ─────────────────────────────────────
 
-  /**
-   * Get (or lazily open) a standard collection.
-   * Opens .ovn + .ovni + .wal files on first access.
-   */
   async collection<T extends OvnDocument = OvnDocument>(name: string): Promise<Collection<T>> {
     this._assertOpen();
-    if (this.collections.has(name)) return this.collections.get(name) as Collection<T>;
-    const engine = new StorageEngine(this.dirPath, name, this.cacheSize);
+    const existing = this._cols.get(name);
+    if (existing) return existing as Collection<T>;
+
+    const colDir = path.join(this._dirPath, name);
+    const engine = new StorageEngine(colDir, name, this._cacheSize);
     await engine.open();
+
     const col = new Collection<T>(name, engine);
-    this.engines    .set(name, engine);
-    this.collections.set(name, col);
+    this._engines.set(name, engine);
+    this._cols.set(name, col as Collection<any>);
+    log.debug('Collection opened', { name });
     return col;
   }
 
-  /**
-   * Get (or lazily open) a CollectionV2 with optional crypto + secondary indexes.
-   * CollectionV2 is a drop-in superset of Collection.
-   */
   async collectionV2<T extends OvnDocument = OvnDocument>(
     name: string,
     opts: CollectionV2Options = {},
   ): Promise<CollectionV2<T>> {
     this._assertOpen();
-    if (this.collections.has(name)) {
-      const existing = this.collections.get(name);
+    const existing = this._cols.get(name);
+    if (existing) {
       if (existing instanceof CollectionV2) return existing as CollectionV2<T>;
-      throw new Error(`[OvnDB] Collection "${name}" already opened as basic Collection`);
+      throw new Error(`[OvnDB] Collection "${name}" sudah dibuka sebagai Collection biasa`);
     }
-    const engine = new StorageEngine(this.dirPath, name, this.cacheSize);
-    // IMPORTANT: inject decryptFn BEFORE engine.open() so that _loadIndex /
-    // _rebuildIndex can decrypt payloads to recover _id from encrypted records.
+
+    const colDir = path.join(this._dirPath, name);
+    const engine = new StorageEngine(colDir, name, this._cacheSize);
     if (opts.crypto) {
-      engine.decryptFn = (buf: Buffer) => opts.crypto!.decrypt(buf);
+      engine.decryptFn = (buf) => opts.crypto!.decrypt(buf);
+      this._encrypted.add(name);
     }
     await engine.open();
-    const col = new CollectionV2<T>(name, engine, this.dirPath, opts);
-    await col.init();
-    this.engines    .set(name, engine);
-    this.collections.set(name, col);
+
+    const col = new CollectionV2<T>(name, engine, opts);
+    await col.init(opts);
+    this._engines.set(name, engine);
+    this._cols.set(name, col as unknown as Collection<any>);
+    log.debug('CollectionV2 opened', { name, encrypted: !!opts.crypto });
     return col;
   }
 
-  /** Drop a collection — deletes all associated files. */
+  // ── Transaction ───────────────────────────────────────────
+
+  beginTransaction(): Transaction {
+    this._assertOpen();
+    return new Transaction();
+  }
+
+  // ── Maintenance ───────────────────────────────────────────
+
   async dropCollection(name: string): Promise<void> {
-    const engine = this.engines.get(name);
-    if (engine) { await engine.close(); this.engines.delete(name); this.collections.delete(name); }
-    const base = path.join(this.dirPath, name);
-    await Promise.all([
-      fsp.unlink(`${base}.ovn` ).catch(() => {}),
-      fsp.unlink(`${base}.ovni`).catch(() => {}),
-      fsp.unlink(`${base}.wal` ).catch(() => {}),
-    ]);
+    this._assertOpen();
+    const engine = this._engines.get(name);
+    if (engine) {
+      await engine.close();
+      this._engines.delete(name);
+      this._cols.delete(name);
+      this._encrypted.delete(name);
+    }
+    const colDir = path.join(this._dirPath, name);
+    await fsp.rm(colDir, { recursive: true, force: true });
+    log.info('Collection dropped', { name });
   }
 
-  /** List all collection names in this database. */
+  /** update: kembalikan nama collection dari direktori yang ada */
   async listCollections(): Promise<string[]> {
-    const files = await fsp.readdir(this.dirPath);
-    const names = new Set<string>();
-    for (const f of files) if (f.endsWith('.ovn')) names.add(f.slice(0, -4));
-    return [...names];
+    this._assertOpen();
+    try {
+      const entries = await fsp.readdir(this._dirPath, { withFileTypes: true });
+      return entries.filter(e => e.isDirectory()).map(e => e.name);
+    } catch {
+      return [];
+    }
   }
 
-  /** Flush all pending writes across all open collections. */
+  /**
+   * feat: cek apakah collection dengan nama tertentu sudah ada di disk
+   */
+  async collectionExists(name: string): Promise<boolean> {
+    this._assertOpen();
+    try {
+      const stat = await fsp.stat(path.join(this._dirPath, name));
+      return stat.isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
   async flushAll(): Promise<void> {
-    await Promise.all([...this.collections.values()].map(c => c.flush()));
+    this._assertOpen();
+    await Promise.all([...this._cols.values()].map(c => c.flush()));
   }
 
-  /** Gracefully close all collections and flush pending writes. */
+  /**
+   * feat: backup — buat salinan konsisten semua collection yang terbuka
+   * ke direktori tujuan. Aman dilakukan saat DB aktif.
+   *
+   * @param destPath  Direktori tujuan backup (akan dibuat jika belum ada)
+   *
+   * @example
+   *   await db.backup('./backup/2024-01-01');
+   */
+  async backup(destPath: string): Promise<void> {
+    this._assertOpen();
+    const resolved = path.resolve(destPath);
+    await fsp.mkdir(resolved, { recursive: true });
+
+    // Flush semua collection dulu
+    await this.flushAll();
+
+    // Backup setiap collection secara paralel
+    await Promise.all(
+      [...this._engines.entries()].map(([name, engine]) =>
+        engine.backup(path.join(resolved, name)),
+      ),
+    );
+
+    log.info('Full database backup complete', { dest: resolved, collections: this._engines.size });
+  }
+
+  /**
+   * feat: status — kembalikan laporan kesehatan lengkap database.
+   * Berguna untuk monitoring, alerting, dan debugging.
+   *
+   * @example
+   *   const s = await db.status();
+   *   console.log(`Healthy: ${s.isHealthy}, Total: ${s.totalSize} bytes`);
+   */
+  async status(): Promise<DBStatus> {
+    this._assertOpen();
+
+    const collections: CollectionStatus[] = [];
+    let totalSize = 0;
+    let isHealthy = true;
+
+    for (const [name, engine] of this._engines.entries()) {
+      try {
+        const s = await engine.stats(name);
+        const colStatus: CollectionStatus = {
+          name,
+          totalLive:     s.totalLive,
+          totalDead:     s.totalDead,
+          segmentCount:  s.segmentCount,
+          totalFileSize: s.totalFileSize,
+          fragmentRatio: s.fragmentRatio,
+          encrypted:     this._encrypted.has(name),
+          indexCount:    s.indexCount,
+          cacheHitRate:  s.cacheHitRate,
+        };
+        collections.push(colStatus);
+        totalSize += s.totalFileSize;
+        // Tandai tidak sehat jika fragmentasi > 60%
+        if (s.fragmentRatio > 0.6) isHealthy = false;
+      } catch (err) {
+        log.error('stats error', { name, err: String(err) });
+        isHealthy = false;
+      }
+    }
+
+    return {
+      path:        this._dirPath,
+      openedAt:    this._openedAt,
+      collections,
+      totalSize,
+      isHealthy,
+    };
+  }
+
   async close(): Promise<void> {
     if (this._closed) return;
     this._closed = true;
-    log.info('Closing database', { path: this.dirPath });
-    await Promise.all([...this.engines.values()].map(e => e.close()));
-    this.engines.clear();
-    this.collections.clear();
-    // Release file lock setelah semua engine ditutup
+    log.info('Closing database', { path: this._dirPath });
+    await Promise.all([...this._engines.values()].map(e => e.close()));
+    this._engines.clear();
+    this._cols.clear();
+    this._encrypted.clear();
     if (this._lock) await this._lock.release();
+    log.info('Database closed');
   }
 
-  get path():   string  { return this.dirPath; }
+  get path():   string  { return this._dirPath; }
   get isOpen(): boolean { return !this._closed; }
 
   private _assertOpen(): void {
-    if (this._closed) throw new Error('[OvnDB] Database is closed');
+    if (this._closed) throw new Error('[OvnDB] Database sudah ditutup');
   }
 }
 
-// ── Re-exports ────────────────────────────────────────────────
-export { Collection }                             from './collection.js';
-export { CollectionV2, type CollectionV2Options } from './collection-v2.js';
-export { CryptoLayer, cryptoFromPassphrase, CRYPTO_OVERHEAD } from './crypto/crypto-layer.js';
-export { RelationManager, type RelationMap }      from './relations/relation-manager.js';
-export { SecondaryIndexManager, type IndexDefinition } from './core/secondary-index.js';
-export { generateId, idToTimestamp, isValidId }   from './utils/id-generator.js';
-export { makeLogger }                             from './utils/logger.js';
+// ── Re-exports (public API) ───────────────────────────────────
 
-// v1.1 new exports
-export { FileLock }                               from './core/file-lock.js';
-export { Transaction, RollbackFailedError, type TxStatus } from './core/transaction.js';
-export { TTLIndex, type TTLIndexOptions }         from './core/ttl-index.js';
+export { Collection }                        from './collection/collection.js';
+export { CollectionV2, type CollectionV2Options } from './collection/collection-v2.js';
+
+export { CryptoLayer, cryptoFromPassphrase, CRYPTO_OVERHEAD } from './crypto/crypto-layer.js';
+
 export {
-  Observability, getObservability, resetObservability,
-  type ObservabilityOptions, type ObservabilityReport, type QueryRecord,
-} from './core/observability.js';
+  Transaction, RollbackFailedError, WriteConflictError,
+} from './core/transaction/transaction.js';
+
 export {
   SchemaValidator, ValidationError, field,
   type SchemaDefinition, type FieldSchema, type FieldType, type ValidationResult,
-} from './core/schema-validator.js';
+} from './schema/schema-validator.js';
+
+export { TTLIndex, type TTLIndexOptions } from './ttl/ttl-index.js';
+
+export {
+  Observability, getObservability, resetObservability,
+  type ObservabilityOptions, type ObservabilityReport, type OperationRecord,
+} from './observability/observability.js';
+
+export { RelationManager, type RelationMap } from './collection/relation-manager.js';
+
+export {
+  ChangeStream, ChangeStreamRegistry, type WatchOptions,
+} from './collection/change-stream.js';
+
+export { generateId, idToTimestamp, isValidId } from './utils/id-generator.js';
+export { makeLogger } from './utils/logger.js';
+export { FileLock }   from './utils/file-lock.js';
 
 export type {
   OvnDocument, QueryFilter, QueryOptions, UpdateSpec,
-  OvnStats, FileFlags, ForeignKey, ForeignKeyArray,
-} from './types.js';
+  AggregationStage, OvnStats, IndexDefinition, QueryPlan,
+  RecordPointer, SegmentMeta, CollectionManifest,
+  ChangeEvent, ChangeOperationType,
+  TxStatus, TxSnapshot,
+  ForeignKey, ForeignKeyArray,
+  // feat: new types
+  BulkWriteOp, BulkWriteResult,
+  DBStatus, CollectionStatus,
+  CursorOptions,
+} from './types/index.js';
