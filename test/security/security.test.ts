@@ -575,7 +575,7 @@ describe('aggregation.ts hardening', async () => {
   describe('$sort key validation', () => {
     it('throws on __proto__ as sort key', async () => {
       await assert.rejects(
-        compilePipeline([{ $sort: { '__proto__': 1 as (1 | -1) } }], noResolver)(sampleDocs),
+        compilePipeline([{ $sort: { ['__proto__']: 1 as (1 | -1) } }], noResolver)(sampleDocs),
         /terlarang/
       );
     });

@@ -77,9 +77,12 @@ async function applyStage(
       throw new Error('[OvnDB] $sort field mengandung kunci terlarang: "__proto__" (prototype injection detected)');
     }
     // Also check own keys for explicit dangerous key names
+    // Note: do NOT exclude '__proto__' here — tsx/esbuild transforms { '__proto__': x }
+    // into an actual own property, so Reflect.ownKeys CAN surface it. isDangerousKey
+    // already covers '__proto__', 'constructor', and 'prototype'.
     for (const k of Reflect.ownKeys(sortSpec)) {
       const ks = String(k);
-      if (ks !== '__proto__' && isDangerousKey(ks))
+      if (isDangerousKey(ks))
         throw new Error(`[OvnDB] $sort field mengandung kunci terlarang: "${ks}"`);
     }
     return applySort(docs, sortSpec);
@@ -210,8 +213,8 @@ function applyGroup(
   spec: Record<string, unknown>,
 ): Record<string, unknown>[] {
   const groupKey = spec['_id'];
-  const groups   = new Map<string, {
-    key:  unknown;
+  const groups = new Map<string, {
+    key: unknown;
     docs: Record<string, unknown>[];
   }>();
 
@@ -262,8 +265,8 @@ function evaluateAccumulator(
     }, 0);
   }
   if ('$avg' in expr) {
-    const path  = ((expr.$avg as string) ?? '').slice(1);
-    const nums  = docs.map(d => getFieldValue(d, path)).filter(v => typeof v === 'number') as number[];
+    const path = ((expr.$avg as string) ?? '').slice(1);
+    const nums = docs.map(d => getFieldValue(d, path)).filter(v => typeof v === 'number') as number[];
     return nums.length ? nums.reduce((s, v) => s + v, 0) / nums.length : null;
   }
   if ('$min' in expr) {
@@ -281,7 +284,7 @@ function evaluateAccumulator(
   }
   if ('$push' in expr) {
     const field = expr.$push;
-    const path  = typeof field === 'string' && field.startsWith('$') ? field.slice(1) : null;
+    const path = typeof field === 'string' && field.startsWith('$') ? field.slice(1) : null;
     return path ? docs.map(d => getFieldValue(d, path)) : docs.map(() => field);
   }
   if ('$first' in expr) {
@@ -294,7 +297,7 @@ function evaluateAccumulator(
   }
   if ('$addToSet' in expr) {
     const path = ((expr.$addToSet as string) ?? '').slice(1);
-    const set  = new Set(docs.map(d => JSON.stringify(getFieldValue(d, path))));
+    const set = new Set(docs.map(d => JSON.stringify(getFieldValue(d, path))));
     return [...set].map(v => JSON.parse(v));
   }
   return null;
@@ -308,7 +311,7 @@ function applySort(docs: Record<string, unknown>[], sort: Record<string, 1 | -1>
     for (const [field, dir] of entries) {
       const av = getFieldValue(a, field);
       const bv = getFieldValue(b, field);
-      let cmp  = 0;
+      let cmp = 0;
       if (av === null || av === undefined) cmp = -1;
       else if (bv === null || bv === undefined) cmp = 1;
       else if ((av as number) < (bv as number)) cmp = -1;
@@ -325,9 +328,9 @@ function applyUnwind(
   docs: Record<string, unknown>[],
   spec: string | { path: string; preserveNullAndEmptyArrays?: boolean },
 ): Record<string, unknown>[] {
-  const path    = typeof spec === 'string' ? spec : spec.path;
+  const path = typeof spec === 'string' ? spec : spec.path;
   const preserve = typeof spec === 'object' ? (spec.preserveNullAndEmptyArrays ?? false) : false;
-  const field   = path.startsWith('$') ? path.slice(1) : path;
+  const field = path.startsWith('$') ? path.slice(1) : path;
   const result: Record<string, unknown>[] = [];
 
   for (const doc of docs) {
@@ -368,7 +371,7 @@ async function applyLookup(
     throw new Error(`[OvnDB] $lookup.as mengandung kunci terlarang: "${spec.as}"`);
 
   const foreignDocs = await resolver(spec.from);
-  const index       = new Map<unknown, Record<string, unknown>[]>();
+  const index = new Map<unknown, Record<string, unknown>[]>();
 
   for (const fd of foreignDocs) {
     const key = getFieldValue(fd, spec.foreignField);
@@ -378,8 +381,8 @@ async function applyLookup(
   }
 
   return docs.map(doc => {
-    const localVal  = getFieldValue(doc, spec.localField);
-    const matched   = index.get(JSON.stringify(localVal)) ?? [];
+    const localVal = getFieldValue(doc, spec.localField);
+    const matched = index.get(JSON.stringify(localVal)) ?? [];
     return { ...doc, [spec.as]: matched };
   });
 }
@@ -434,21 +437,21 @@ function evaluateExpression(
 // ── G11: Type helpers ─────────────────────────────────────────
 
 interface BucketSpec {
-  groupBy:     string;
-  boundaries:  number[];
-  default?:    string;
-  output?:     Record<string, Record<string, unknown>>;
+  groupBy: string;
+  boundaries: number[];
+  default?: string;
+  output?: Record<string, Record<string, unknown>>;
 }
 
 interface DensifySpec {
-  field:      string;
-  range:      { step: number; bounds: [number, number] | 'full' | 'partition' };
+  field: string;
+  range: { step: number; bounds: [number, number] | 'full' | 'partition' };
   partitionByFields?: string[];
 }
 
 interface WindowFieldsSpec {
-  sortBy:  Record<string, 1 | -1>;
-  output:  Record<string, { $sum?: unknown; $avg?: unknown; $rank?: Record<string, unknown>; $denseRank?: Record<string, unknown>; window?: { documents?: [string | number, string | number] } }>;
+  sortBy: Record<string, 1 | -1>;
+  output: Record<string, { $sum?: unknown; $avg?: unknown; $rank?: Record<string, unknown>; $denseRank?: Record<string, unknown>; window?: { documents?: [string | number, string | number] } }>;
 }
 
 // ── G11: $bucket ─────────────────────────────────────────────
@@ -617,6 +620,6 @@ function getWindowDocs(
 ): Record<string, unknown>[] {
   const [start, end] = window;
   const lo = start === 'unbounded' ? 0 : currentIdx + (start as number);
-  const hi = end   === 'current'   ? currentIdx : end === 'unbounded' ? sorted.length - 1 : currentIdx + (end as number);
+  const hi = end === 'current' ? currentIdx : end === 'unbounded' ? sorted.length - 1 : currentIdx + (end as number);
   return sorted.slice(Math.max(0, lo), Math.min(sorted.length, hi + 1));
 }
