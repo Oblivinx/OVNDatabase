@@ -12,10 +12,19 @@
 //
 //  Bandingkan dengan MongoDB ObjectId (24 hex):
 //   - ts(8) + machine(6) + pid(4) + counter(6) = sama konsepnya
+//
+//  SECURITY FIX (v3.1): PRNG diganti crypto.randomBytes(3).
+//  PRNG seperti pseudo-random number generator adalah deterministik dan predictable —
+//  observer yang melihat beberapa ID dapat memprediksi PROCESS_RAND
+//  dari proses lain. crypto.randomBytes menggunakan OS CSPRNG
+//  (getrandom() di Linux) sehingga token per-proses tidak dapat ditebak.
 // ============================================================
 
-// 6 hex = 3 bytes random, di-set sekali per process
-const PROCESS_RAND = Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
+import crypto from 'crypto';
+
+// 6 hex = 3 bytes CSPRNG, di-set sekali per process
+// SECURITY: crypto.randomBytes(3) bukan PRNG — tidak predictable
+const PROCESS_RAND = crypto.randomBytes(3).toString('hex');
 
 let lastMs  = 0;
 let counter = 0;

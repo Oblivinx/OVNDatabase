@@ -63,7 +63,9 @@ export class PageManager {
 
   async open(): Promise<void> {
     const exists = fs.existsSync(this.filePath);
-    this.fd = fs.openSync(this.filePath, exists ? 'r+' : 'w+');
+    // SECURITY: mode 0o600 — index file (.ovni) berisi pointer ke semua record
+    // di segmen; hanya owner yang boleh baca/tulis
+    this.fd = fs.openSync(this.filePath, exists ? 'r+' : 'w+', 0o600);
     if (!exists || fs.fstatSync(this.fd).size < INDEX_HEADER_SIZE) {
       await this._initFile();
     } else {

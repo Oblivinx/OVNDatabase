@@ -22,6 +22,7 @@ import type {
   AggregationStage, OvnDocument, QueryFilter,
 } from '../../types/index.js';
 import { matchFilter, applyProjection, getFieldValue, setNestedField } from './filter.js';
+import { validateCollectionName, validateQueryFilter, isDangerousKey } from '../../utils/security.js';
 
 export type AggFn = (docs: Record<string, unknown>[]) => Record<string, unknown>[];
 
@@ -68,15 +69,36 @@ async function applyStage(
   }
 
   if ('$sort' in stage) {
-    return applySort(docs, stage.$sort as Record<string, 1 | -1>);
+    const sortSpec = stage.$sort as Record<string, 1 | -1>;
+    // SECURITY: detect __proto__ injection via prototype chain
+    // { '__proto__': 1 } sets the prototype, not a property — Object.getPrototypeOf detects it
+    const sortProto = Object.getPrototypeOf(sortSpec);
+    if (sortProto !== Object.prototype && sortProto !== null) {
+      throw new Error('[OvnDB] $sort field mengandung kunci terlarang: "__proto__" (prototype injection detected)');
+    }
+    // Also check own keys for explicit dangerous key names
+    for (const k of Reflect.ownKeys(sortSpec)) {
+      const ks = String(k);
+      if (ks !== '__proto__' && isDangerousKey(ks))
+        throw new Error(`[OvnDB] $sort field mengandung kunci terlarang: "${ks}"`);
+    }
+    return applySort(docs, sortSpec);
   }
 
   if ('$limit' in stage) {
-    return docs.slice(0, stage.$limit as number);
+    const n = stage.$limit as number;
+    // SECURITY: $limit harus bilangan bulat positif — negatif atau NaN slice(-N) membaca semua
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < 0)
+      throw new Error('[OvnDB] $limit harus bilangan positif');
+    return docs.slice(0, Math.floor(n));
   }
 
   if ('$skip' in stage) {
-    return docs.slice(stage.$skip as number);
+    const n = stage.$skip as number;
+    // SECURITY: $skip negatif membaca semua dokumen dari akhir (undefined behaviour)
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < 0)
+      throw new Error('[OvnDB] $skip harus bilangan positif');
+    return docs.slice(Math.floor(n));
   }
 
   if ('$unwind' in stage) {
@@ -84,7 +106,13 @@ async function applyStage(
   }
 
   if ('$count' in stage) {
-    return [{ [stage.$count as string]: docs.length }];
+    const fieldName = stage.$count as string;
+    // SECURITY: validasi nama field output $count
+    if (typeof fieldName !== 'string' || fieldName.length === 0)
+      throw new Error('[OvnDB] $count harus berupa nama field non-kosong');
+    if (isDangerousKey(fieldName))
+      throw new Error(`[OvnDB] $count field mengandung kunci terlarang: "${fieldName}"`);
+    return [{ [fieldName]: docs.length }];
   }
 
   if ('$replaceRoot' in stage) {
@@ -322,6 +350,23 @@ async function applyLookup(
   spec: { from: string; localField: string; foreignField: string; as: string },
   resolver: (c: string) => Promise<Record<string, unknown>[]>,
 ): Promise<Record<string, unknown>[]> {
+  // SECURITY: validasi nama collection dari pipeline — cegah path traversal
+  // Pipeline bisa datang dari input user lewat JSON, jadi nama "from" tidak dipercaya.
+  validateCollectionName(spec.from);
+
+  // SECURITY: validasi field names — cegah prototype pollution via $lookup field path
+  for (const part of spec.localField.split('.')) {
+    if (isDangerousKey(part))
+      throw new Error(`[OvnDB] $lookup.localField mengandung kunci terlarang: "${part}"`);
+  }
+  for (const part of spec.foreignField.split('.')) {
+    if (isDangerousKey(part))
+      throw new Error(`[OvnDB] $lookup.foreignField mengandung kunci terlarang: "${part}"`);
+  }
+  // SECURITY: validasi nama output field
+  if (isDangerousKey(spec.as))
+    throw new Error(`[OvnDB] $lookup.as mengandung kunci terlarang: "${spec.as}"`);
+
   const foreignDocs = await resolver(spec.from);
   const index       = new Map<unknown, Record<string, unknown>[]>();
 

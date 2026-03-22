@@ -1,6 +1,6 @@
 {
   "name": "ovndb",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "High-performance embedded NoSQL database for Node.js — on-disk B+ Tree, multi-segment storage, MVCC, aggregation pipeline, zero dependencies",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,9 +14,10 @@
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
-    "test": "cross-env OVNDB_LOG=silent node --import tsx/esm --test test/unit/crc32.test.ts test/unit/lru-cache.test.ts test/unit/filter.test.ts test/unit/schema-validator.test.ts test/unit/aggregation.test.ts test/unit/crypto-layer.test.ts test/unit/mvcc.test.ts test/unit/id-generator.test.ts test/unit/relation-manager.test.ts test/integration/collection.test.ts",
+    "test": "cross-env OVNDB_LOG=silent node --import tsx/esm --test test/unit/crc32.test.ts test/unit/lru-cache.test.ts test/unit/filter.test.ts test/unit/schema-validator.test.ts test/unit/aggregation.test.ts test/unit/crypto-layer.test.ts test/unit/mvcc.test.ts test/unit/id-generator.test.ts test/unit/relation-manager.test.ts test/integration/collection.test.ts test/integration/transaction.test.ts test/security/security.test.ts",
     "test:unit": "cross-env OVNDB_LOG=silent node --import tsx/esm --test test/unit/crc32.test.ts test/unit/lru-cache.test.ts test/unit/filter.test.ts test/unit/schema-validator.test.ts test/unit/aggregation.test.ts test/unit/crypto-layer.test.ts test/unit/mvcc.test.ts test/unit/id-generator.test.ts test/unit/relation-manager.test.ts",
-    "test:integration": "cross-env OVNDB_LOG=silent node --import tsx/esm --test test/integration/collection.test.ts",
+    "test:security": "cross-env OVNDB_LOG=silent node --import tsx/esm --test test/security/security.test.ts",
+    "test:integration": "cross-env OVNDB_LOG=silent node --import tsx/esm --test test/integration/collection.test.ts test/integration/transaction.test.ts",
     "bench": "cross-env OVNDB_LOG=silent BENCH_N=10000 node --import tsx/esm test/benchmark/throughput.benchmark.ts",
     "bench:50k": "cross-env OVNDB_LOG=silent BENCH_N=50000 node --import tsx/esm test/benchmark/throughput.benchmark.ts",
     "stress": "cross-env OVNDB_LOG=silent STRESS_N=10000000 node --import tsx/esm examples/stress-test-10m.ts",

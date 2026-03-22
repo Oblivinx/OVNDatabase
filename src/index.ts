@@ -1,6 +1,6 @@
 // ============================================================
-//  OvnDB v3.0 — Public Entry Point
-//  update: export semua fitur baru v3.0
+//  OvnDB v4.0 — Public Entry Point
+//  v4.0: FTS, BloomFilter, Compound Index, Savepoints, Import/Export
 // ============================================================
 
 import fsp  from 'fs/promises';
@@ -11,9 +11,12 @@ import { CollectionV2, type CollectionV2Options } from './collection/collection-
 import { FileLock }       from './utils/file-lock.js';
 import { Transaction }    from './core/transaction/transaction.js';
 import { makeLogger }     from './utils/logger.js';
+import { validateCollectionName, assertPathInside } from './utils/security.js';
 import type { OvnDocument, DBStatus, CollectionStatus } from './types/index.js';
 
 const log = makeLogger('db');
+
+export const VERSION = '4.0.0';
 
 export interface OvnDBOptions {
   /** Byte limit untuk LRU cache per collection (default 256 MB). */
@@ -28,6 +31,21 @@ export interface OvnDBOptions {
   compressFn?:       (buf: Buffer) => Buffer;
   /** Inject decompress function untuk G15. Contoh: zlib.gunzipSync */
   decompressFn?:     (buf: Buffer) => Buffer;
+  /**
+   * SECURITY: 32-byte HMAC key untuk manifest integrity.
+   * Jika di-set, manifest checksum ditulis sebagai HMAC-SHA256 (bukan SHA-256 plain).
+   * HMAC mendeteksi modifikasi disengaja — SHA-256 plain hanya mendeteksi korupsi acak.
+   *
+   * Untuk database terenkripsi, derive dari key yang sama:
+   * @example
+   *   import crypto from 'crypto';
+   *   const masterKey = await cryptoFromPassphrase(pass, dir);
+   *   // Derive integrity key dari master key (HKDF-like dengan hash)
+   *   const integrityKey = crypto.createHash('sha256')
+   *     .update(masterKey.key).update('ovndb-manifest-hmac').digest();
+   *   const db = await OvnDB.open('./data', { integrityKey });
+   */
+  integrityKey?:     Buffer;
 }
 
 export class OvnDB {
@@ -54,6 +72,11 @@ export class OvnDB {
     // G1: prefer cacheBytes, fallback ke cacheSize × 4096 untuk compat
     const cacheBytes = opts.cacheBytes
       ?? (opts.cacheSize ? opts.cacheSize * 4096 : 256 * 1024 * 1024);
+
+    // SECURITY: validate integrityKey early so open() rejects immediately
+    if (opts.integrityKey !== undefined && opts.integrityKey.length !== 32) {
+      throw new Error('[OvnDB] integrityKey harus tepat 32 byte (256-bit untuk HMAC-SHA256)');
+    }
 
     if (opts.mkdirp !== false) await fsp.mkdir(resolved, { recursive: true });
 
@@ -85,6 +108,8 @@ export class OvnDB {
 
   async collection<T extends OvnDocument = OvnDocument>(name: string): Promise<Collection<T>> {
     this._assertOpen();
+    // SECURITY: cegah path traversal dan nama tidak valid
+    validateCollectionName(name);
     const existing = this._cols.get(name);
     if (existing) return existing as Collection<T>;
 
@@ -102,6 +127,8 @@ export class OvnDB {
     opts: CollectionV2Options = {},
   ): Promise<CollectionV2<T>> {
     this._assertOpen();
+    // SECURITY: cegah path traversal dan nama tidak valid
+    validateCollectionName(name);
     const existing = this._cols.get(name);
     if (existing) {
       if (existing instanceof CollectionV2) return existing as CollectionV2<T>;
@@ -133,6 +160,8 @@ export class OvnDB {
 
   async dropCollection(name: string): Promise<void> {
     this._assertOpen();
+    // SECURITY: cegah path traversal
+    validateCollectionName(name);
     const engine = this._engines.get(name);
     if (engine) {
       await engine.close();
@@ -166,6 +195,15 @@ export class OvnDB {
   async backup(destPath: string): Promise<void> {
     this._assertOpen();
     const resolved = path.resolve(destPath);
+    // SECURITY: pastikan backup destination tidak berada di dalam data dir
+    // (mencegah overwrite data aktif) dan tidak escaping ke atas via ../
+    // Kita hanya melarang dest yang SAMA dengan atau di dalam data dir sendiri.
+    // Dest di luar data dir (misal /backups/...) diperbolehkan.
+    if (resolved.startsWith(this._dirPath)) {
+      throw new Error(
+        '[OvnDB] Backup destination tidak boleh berada di dalam direktori data aktif'
+      );
+    }
     await fsp.mkdir(resolved, { recursive: true });
     await this.flushAll();
     await Promise.all(
@@ -222,6 +260,12 @@ export class OvnDB {
     // G15: propagate compression hooks dari OvnDBOptions
     if (this._opts.compressFn)   engine.compressFn   = this._opts.compressFn;
     if (this._opts.decompressFn) engine.decompressFn = this._opts.decompressFn;
+    // SECURITY: propagate HMAC integrity key untuk manifest protection
+    if (this._opts.integrityKey) {
+      if (this._opts.integrityKey.length !== 32)
+        throw new Error('[OvnDB] integrityKey harus tepat 32 bytes');
+      engine.integrityKey = this._opts.integrityKey;
+    }
     return engine;
   }
 
@@ -247,6 +291,11 @@ export { makeLogger }                                from './utils/logger.js';
 export { FileLock }                                  from './utils/file-lock.js';
 export type { ExecutionStats }                        from './core/query/planner.js';
 
+// v4.0 new exports
+export { FTSIndex }                                  from './core/index/fts-index.js';
+export { BloomFilter }                               from './core/storage/bloom-filter.js';
+export { exportTo, importFrom }                      from './collection/import-export.js';
+
 export type {
   OvnDocument, QueryFilter, QueryOptions, UpdateSpec,
   AggregationStage, OvnStats, IndexDefinition, QueryPlan,
@@ -257,4 +306,7 @@ export type {
   BulkWriteOp, BulkWriteResult,
   DBStatus, CollectionStatus,
   CursorOptions,
+  // v4.0 new types
+  TextIndexDefinition,
+  ExportOptions, ImportOptions, ImportResult,
 } from './types/index.js';

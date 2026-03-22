@@ -57,6 +57,14 @@ export class StorageEngine {
   decompressFn?: (buf: Buffer) => Buffer;
   /** Inject decrypt function untuk CollectionV2 */
   decryptFn?:    (buf: Buffer) => Buffer;
+  /**
+   * SECURITY: inject 32-byte HMAC key untuk manifest integrity verification.
+   * Jika di-set, manifest ditulis/dibaca dengan HMAC-SHA256 bukan SHA-256 plain.
+   * Derive dari passphrase yang sama dengan encryption key menggunakan HKDF:
+   *   engine.integrityKey = crypto.hkdfSync('sha256', masterKey, salt,
+   *     Buffer.from('ovndb-manifest-hmac'), 32);
+   */
+  integrityKey?: Buffer;
 
   constructor(dirPath: string, colName: string, cacheBytes = MAX_CACHE_BYTES) {
     this.dirPath     = dirPath;
@@ -78,6 +86,8 @@ export class StorageEngine {
     // G15: propagate compression hooks ke SegmentManager sebelum open
     if (this.compressFn)   this.segments.compressFn   = this.compressFn;
     if (this.decompressFn) this.segments.decompressFn = this.decompressFn;
+    // SECURITY: propagate integrityKey untuk HMAC manifest verification
+    if (this.integrityKey) this.segments.integrityKey = this.integrityKey;
 
     await this.segments.open();
     await this.pageManager.open();
@@ -156,7 +166,7 @@ export class StorageEngine {
   }
 
   async insert(id: string, data: Buffer, txId?: bigint): Promise<void> {
-    if (await this._liveExists(id)) throw new Error(`[OvnDB] Duplicate _id: "${id}"`);
+    if (await this._liveExists(id)) throw new Error(`[OvnDB] Duplicate _id`);
     const tid = txId ?? this.mvcc.autoCommitTxId();
     this.mvcc.recordWrite(tid, id);
     await this.wal.append(WalOp.INSERT, id, data, tid);
@@ -168,7 +178,7 @@ export class StorageEngine {
   }
 
   async update(id: string, data: Buffer, txId?: bigint): Promise<void> {
-    if (!await this._liveExists(id)) throw new Error(`[OvnDB] Record not found: "${id}"`);
+    if (!await this._liveExists(id)) throw new Error(`[OvnDB] Record not found`);
     const tid = txId ?? this.mvcc.autoCommitTxId();
     this.mvcc.recordWrite(tid, id);
     await this.wal.append(WalOp.UPDATE, id, data, tid);
@@ -308,6 +318,14 @@ export class StorageEngine {
     if (this.writeBuffer.size > 0) await this._doFlush(true);
     await this.pageManager.flushDirty();
     await this.wal.checkpoint();
+
+    // SECURITY: pastikan destPath tidak berada di dalam dirPath sendiri
+    const resolvedDest = path.resolve(destPath);
+    const resolvedSrc  = path.resolve(this.dirPath);
+    if (resolvedDest.startsWith(resolvedSrc)) {
+      throw new Error('[OvnDB] Backup destination tidak boleh berada di dalam direktori sumber');
+    }
+
     await fsp.mkdir(destPath, { recursive: true });
     const entries = await fsp.readdir(this.dirPath, { withFileTypes: true });
     await Promise.all(
@@ -315,7 +333,8 @@ export class StorageEngine {
         fsp.copyFile(path.join(this.dirPath, e.name), path.join(destPath, e.name)),
       ),
     );
-    log.info(`Backup complete`, { col: this.colName, dest: destPath });
+    // SECURITY: tidak log path user ke output untuk menghindari log injection
+    log.info(`Backup complete`, { col: this.colName });
   }
 
   async stats(collection: string): Promise<OvnStats> {

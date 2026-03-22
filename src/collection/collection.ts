@@ -1,12 +1,15 @@
 // ============================================================
-//  OvnDB v3.0 — Collection
+//  OvnDB v4.0 — Collection
 //
-//  G19 FIX: findWithStats() — eksekusi query + kembalikan ExecutionStats.
-//  Update: semua existing v2.1 features dipertahankan.
+//  v4.0 NEW:
+//  - createTextIndex(field) — full-text search index
+//  - find({ $text: 'query' }) — FTS query operator
+//  - Compound index support in _scanWithPlan()
+//  - importFrom() / exportTo() — NDJSON and JSON
 //
-//  v3.1 FIXES:
-//  - insertOne/updateOne/deleteOne: storage dulu, index kemudian (fix consistency bug)
-//  - updateMany/deleteMany: streaming — tidak load semua docs ke RAM (fix OOM risk)
+//  From v3.0:
+//  - insertOne/updateOne/deleteOne: storage dulu, index kemudian
+//  - updateMany/deleteMany: streaming — tidak load semua ke RAM
 // ============================================================
 
 import { generateId }       from '../utils/id-generator.js';
@@ -15,11 +18,18 @@ import { QueryPlanner, type ExecutionStats }  from '../core/query/planner.js';
 import { compilePipeline }  from '../core/query/aggregation.js';
 import { ChangeStreamRegistry } from './change-stream.js';
 import { SecondaryIndexManager } from '../core/index/secondary-index.js';
+import { FTSIndex }          from '../core/index/fts-index.js';
+import { exportTo as _exportTo, importFrom as _importFrom } from './import-export.js';
 import type { StorageEngine }  from '../core/storage/storage-engine.js';
+import {
+  validateQueryFilter, validateUpdateSpec, validateDocumentSize,
+  validateDocumentKeys, validateDocumentId, isDangerousKey, MAX_PIPELINE_STAGES,
+} from '../utils/security.js';
 import type {
   OvnDocument, QueryFilter, QueryOptions, UpdateSpec,
   AggregationStage, OvnStats, IndexDefinition, QueryPlan,
   ChangeEvent, BulkWriteOp, BulkWriteResult,
+  ExportOptions, ImportOptions, ImportResult,
 } from '../types/index.js';
 
 export class Collection<T extends OvnDocument = OvnDocument> {
@@ -29,6 +39,8 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   protected readonly idxMgr:  SecondaryIndexManager;
   protected readonly streams: ChangeStreamRegistry<T>;
   private   readonly planner: QueryPlanner;
+  /** v4.0: FTS indexes keyed by field name */
+  protected readonly ftsIndexes: Map<string, FTSIndex> = new Map();
 
   constructor(name: string, engine: StorageEngine) {
     this.name    = name;
@@ -42,8 +54,10 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   // ── Index Management ─────────────────────────────────────
 
   async createIndex(def: IndexDefinition): Promise<void> {
-    if (this.indexes.has(def.field)) return;
-    this.indexes.set(def.field, def);
+    // Support compound index: normalize field to string key
+    const fieldKey = Array.isArray(def.field) ? def.field.join('__') : def.field;
+    if (this.indexes.has(fieldKey)) return;
+    this.indexes.set(fieldKey, def);
     this.idxMgr.addIndex(def);
     await this.idxMgr.open();
     const allDocs: Record<string, unknown>[] = [];
@@ -55,18 +69,56 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     await this.idxMgr.save();
   }
 
-  async dropIndex(field: string): Promise<void> { this.indexes.delete(field); }
+  async dropIndex(field: string | string[]): Promise<void> {
+    const key = Array.isArray(field) ? field.join('__') : field;
+    this.indexes.delete(key);
+  }
+
+  /**
+   * v4.0: Create a full-text search index on a field.
+   * After creating, use { $text: 'query words' } in find()/findOne().
+   *
+   * @example
+   *   await users.createTextIndex('name');
+   *   const results = await users.find({ $text: 'budi jakarta' });
+   */
+  async createTextIndex(field: string): Promise<void> {
+    if (this.ftsIndexes.has(field)) return;
+    const idx = new FTSIndex(this.engine.dirPath, this.name, field);
+    await idx.open();
+    // Build from existing docs
+    for await (const [, buf] of this.engine.scan()) {
+      const doc = this._parse(buf);
+      if (!doc) continue;
+      const val = (doc as Record<string, unknown>)[field];
+      if (typeof val === 'string') idx.index((doc as Record<string, unknown>)['_id'] as string, val);
+    }
+    await idx.save();
+    this.ftsIndexes.set(field, idx);
+  }
 
   // ── Insert ────────────────────────────────────────────────
 
   async insertOne(doc: Omit<T, '_id'> & { _id?: string }): Promise<T> {
+    // SECURITY: validate doc BEFORE spread so __proto__ injection is still detectable
+    // { ...doc } would normalize the prototype, losing the __proto__ pollution
+    validateDocumentKeys(doc);
     const full = { ...doc, _id: doc._id ?? generateId() } as T;
+    // SECURITY: validasi _id jika disupply user
+    validateDocumentId(full._id);
     const buf  = this._serialize(full);
+    // SECURITY: batasi ukuran dokumen sebelum masuk storage
+    validateDocumentSize(buf);
     // FIX: storage DULU — jika insert gagal (misal duplicate _id), index tidak tersentuh
     await this.engine.insert(full._id, buf);
     // Index KEMUDIAN — jika gagal, rollback storage insert agar tetap konsisten
     try {
       this.idxMgr.onInsert(full as unknown as Record<string, unknown>);
+      // v4.0: update FTS indexes
+      for (const [field, ftsIdx] of this.ftsIndexes) {
+        const val = (full as Record<string, unknown>)[field];
+        if (typeof val === 'string') ftsIdx.index(full._id, val);
+      }
     } catch (idxErr) {
       try { await this.engine.delete(full._id); } catch { /* best-effort rollback */ }
       throw idxErr;
@@ -85,6 +137,8 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   // ── Find ──────────────────────────────────────────────────
 
   async findOne(filter: QueryFilter, options?: Pick<QueryOptions, 'projection'>): Promise<T | null> {
+    // SECURITY: validasi filter sebelum eksekusi
+    validateQueryFilter(filter);
     if (filter['_id'] !== undefined && typeof filter['_id'] !== 'object') {
       const buf = await this.engine.read(filter['_id'] as string);
       if (!buf) return null;
@@ -114,6 +168,8 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   }
 
   async find(filter: QueryFilter = {}, options: QueryOptions = {}): Promise<T[]> {
+    // SECURITY: validasi filter sebelum eksekusi
+    validateQueryFilter(filter);
     if (options.explain) return [this.explain(filter, options) as unknown as T];
 
     const docs: T[] = [];
@@ -180,12 +236,22 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   }
 
   async countDocuments(filter: QueryFilter = {}): Promise<number> {
+    // SECURITY: validasi filter sebelum eksekusi
+    validateQueryFilter(filter);
     let count = 0;
     for await (const _ of this._scanWithPlan(filter)) count++;
     return count;
   }
 
   async distinct(field: string, filter: QueryFilter = {}): Promise<unknown[]> {
+    // SECURITY: validasi field path dan filter
+    if (typeof field !== 'string' || field.length === 0)
+      throw new Error('[OvnDB] distinct: field harus string non-kosong');
+    for (const part of field.split('.')) {
+      if (isDangerousKey(part))
+        throw new Error(`[OvnDB] distinct: field path mengandung kunci terlarang: "${part}"`);
+    }
+    validateQueryFilter(filter);
     const values = new Set<string>();
     for (const doc of await this.find(filter)) {
       const val = (doc as Record<string, unknown>)[field];
@@ -202,6 +268,9 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   // ── Update ────────────────────────────────────────────────
 
   async updateOne(filter: QueryFilter, spec: UpdateSpec): Promise<boolean> {
+    // SECURITY: validasi filter dan update spec sebelum eksekusi
+    validateQueryFilter(filter);
+    validateUpdateSpec(spec as Record<string, unknown>);
     const doc = await this.findOne(filter);
     if (!doc) return false;
     const before  = { ...doc };
@@ -211,6 +280,12 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     // FIX: storage DULU — jika update gagal, index tidak tersentuh
     await this.engine.update(doc._id, buf);
     this.idxMgr.onUpdate(before as unknown as Record<string, unknown>, updated);
+    // v4.0: update FTS indexes
+    for (const [field, ftsIdx] of this.ftsIndexes) {
+      const newVal = (updated as Record<string, unknown>)[field];
+      if (typeof newVal === 'string') ftsIdx.index(doc._id, newVal);
+      else if (ftsIdx.hasDoc(doc._id)) ftsIdx.remove(doc._id);
+    }
     this._emitChange({
       operationType: 'update', documentKey: { _id: doc._id }, fullDocument: updated as T,
       updateDescription: { updatedFields: spec.$set ?? {}, removedFields: Object.keys(spec.$unset ?? {}) },
@@ -220,6 +295,10 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   }
 
   async updateMany(filter: QueryFilter, spec: UpdateSpec): Promise<number> {
+    // SECURITY: validasi filter dan spec — updateOne akan validasi lagi per-doc tapi
+    // lebih efisien validasi sekali di sini sebelum scan
+    validateQueryFilter(filter);
+    validateUpdateSpec(spec as Record<string, unknown>);
     // FIX: streaming scan — tidak load semua matching docs ke RAM
     // Kumpulkan _id dulu (lightweight), baru update satu per satu
     const ids: string[] = [];
@@ -230,6 +309,8 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   }
 
   async upsertOne(filter: QueryFilter, spec: UpdateSpec): Promise<T> {
+    validateQueryFilter(filter);
+    validateUpdateSpec(spec as Record<string, unknown>);
     const existing = await this.findOne(filter);
     if (!existing) {
       const insertFields = {
@@ -245,6 +326,9 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   }
 
   async replaceOne(filter: QueryFilter, replacement: T): Promise<boolean> {
+    validateQueryFilter(filter);
+    // SECURITY: validasi replacement sebagai dokumen baru
+    validateDocumentKeys(replacement);
     const doc = await this.findOne(filter);
     if (!doc) return false;
     const withId = { ...replacement, _id: doc._id };
@@ -257,16 +341,20 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   // ── Delete ────────────────────────────────────────────────
 
   async deleteOne(filter: QueryFilter): Promise<boolean> {
+    validateQueryFilter(filter);
     const doc = await this.findOne(filter);
     if (!doc) return false;
     // FIX: storage DULU — jika delete gagal, index tidak tersentuh
     await this.engine.delete(doc._id);
     this.idxMgr.onDelete(doc as unknown as Record<string, unknown>);
+    // v4.0: remove from FTS indexes
+    for (const ftsIdx of this.ftsIndexes.values()) ftsIdx.remove(doc._id);
     this._emitChange({ operationType: 'delete', documentKey: { _id: doc._id }, timestamp: Date.now(), txId: 0n });
     return true;
   }
 
   async deleteMany(filter: QueryFilter = {}): Promise<number> {
+    validateQueryFilter(filter);
     // FIX: kumpulkan _id dulu via streaming, baru delete — hindari load semua doc ke RAM
     const ids: string[] = [];
     for await (const doc of this._scanWithPlan(filter)) ids.push(doc._id);
@@ -352,6 +440,11 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     pipeline: AggregationStage[],
     lookupResolver?: (colName: string) => Promise<Record<string, unknown>[]>,
   ): Promise<Record<string, unknown>[]> {
+    // SECURITY: batasi jumlah stage pipeline untuk mencegah DoS
+    if (!Array.isArray(pipeline))
+      throw new Error('[OvnDB] aggregate: pipeline harus array');
+    if (pipeline.length > MAX_PIPELINE_STAGES)
+      throw new Error(`[OvnDB] aggregate: pipeline terlalu banyak stage (maks ${MAX_PIPELINE_STAGES})`);
     const allDocs: Record<string, unknown>[] = [];
     for await (const [, buf] of this.engine.scan()) {
       const doc = this._parse(buf);
@@ -381,6 +474,32 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   beginBulkLoad(): void                { this.engine.beginBulkLoad(); }
   async endBulkLoad(): Promise<void>   { await this.engine.endBulkLoad(); }
 
+  // ── Import / Export (v4.0) ───────────────────────────────
+
+  /**
+   * v4.0: Export collection to a file.
+   * Default format: NDJSON (streaming, one doc per line).
+   *
+   * @example
+   *   await col.exportTo('./backup.ndjson');
+   *   await col.exportTo('./backup.json', { format: 'json' });
+   */
+  async exportTo(filePath: string, opts?: ExportOptions): Promise<number> {
+    return _exportTo(this, filePath, opts);
+  }
+
+  /**
+   * v4.0: Import documents from a file into this collection.
+   * Default format: NDJSON (auto-detected from extension).
+   *
+   * @example
+   *   const result = await col.importFrom('./backup.ndjson');
+   *   console.log(`Imported ${result.inserted} docs`);
+   */
+  async importFrom(filePath: string, opts?: ImportOptions): Promise<ImportResult> {
+    return _importFrom(this, filePath, opts);
+  }
+
   // ── Internal ──────────────────────────────────────────────
 
   protected async *_scanWithPlan(
@@ -396,6 +515,32 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     let   skipped = 0;
 
     if (stats) { stats.planType = plan.planType; stats.indexUsed = plan.indexField ?? null; }
+
+    // v4.0: $text query — use FTS index if available
+    if (filter['$text'] && typeof filter['$text'] === 'string') {
+      // Find which FTS index to use (first registered)
+      for (const [field, ftsIdx] of this.ftsIndexes) {
+        const matchingIds = ftsIdx.search(filter['$text']);
+        if (stats) { stats.planType = 'indexScan'; stats.indexUsed = `fts:${field}`; }
+        const remainingFilter = { ...filter };
+        delete remainingFilter['$text'];
+        for (const id of matchingIds) {
+          if (emitted >= limit) break;
+          const buf = await this.engine.read(id);
+          if (stats) stats.totalDocsScanned++;
+          if (!buf) continue;
+          const doc = this._parse(buf);
+          if (!doc) continue;
+          if (Object.keys(remainingFilter).length > 0 && !matchFilter(doc as unknown as Record<string, unknown>, remainingFilter)) continue;
+          if (afterId && id <= afterId) continue;
+          if (skipped < skip) { skipped++; continue; }
+          if (stats) stats.nReturned++;
+          yield doc;
+          emitted++;
+        }
+        return;
+      }
+    }
 
     if (plan.planType === 'primaryKey' && filter['_id'] !== undefined) {
       const buf = await this.engine.read(filter['_id'] as string);
@@ -414,9 +559,15 @@ export class Collection<T extends OvnDocument = OvnDocument> {
       const condition = filter[plan.indexField];
       let ids: string[] | null = null;
 
-      if (condition !== null && typeof condition !== 'object') {
+      // v4.0: check for compound index first
+      const compoundDef = this._findCompoundIndexFor(filter);
+      if (compoundDef && Array.isArray(compoundDef.field)) {
+        const fields = compoundDef.field;
+        ids = this.idxMgr.lookupCompound(fields, filter as Record<string, unknown>);
+        if (stats) { stats.planType = 'indexScan'; stats.indexUsed = fields.join('__'); }
+      } else if (condition !== null && condition !== undefined && typeof condition !== 'object') {
         ids = this.idxMgr.lookup(plan.indexField, condition);
-      } else if (condition !== null && typeof condition === 'object') {
+      } else if (condition !== null && condition !== undefined && typeof condition === 'object') {
         const ops = condition as Record<string, unknown>;
         if ('$eq' in ops) ids = this.idxMgr.lookup(plan.indexField, ops.$eq);
         else if ('$gte' in ops || '$lte' in ops) {
@@ -459,6 +610,22 @@ export class Collection<T extends OvnDocument = OvnDocument> {
       yield doc;
       emitted++;
     }
+  }
+
+  /** v4.0: Find a compound index definition that covers all filter fields */
+  private _findCompoundIndexFor(filter: QueryFilter): IndexDefinition | null {
+    for (const def of this.idxMgr.getIndexDefs()) {
+      if (!Array.isArray(def.field)) continue;
+      const fields = def.field;
+      // Check if ALL compound fields are present as exact-match conditions in filter
+      if (fields.every(f => {
+        const val = filter[f];
+        return val !== undefined && val !== null && typeof val !== 'object';
+      })) {
+        return def;
+      }
+    }
+    return null;
   }
 
   protected _parse(buf: Buffer): T | null {

@@ -15,6 +15,7 @@
 // ============================================================
 
 import type { QueryFilter, FieldOps, Scalar, UpdateSpec } from '../../types/index.js';
+import { isDangerousKey, validateRegex, MAX_REGEX_PATTERN_LEN } from '../../utils/security.js';
 
 // FIX: Cache compiled RegExp agar tidak di-compile ulang setiap match call.
 // Full scan 1M dokumen dengan $regex tanpa cache = 1M RegExp object allocations.
@@ -23,6 +24,8 @@ const _regexCache = new Map<string, RegExp>();
 
 function _getOrCompileRegex(pattern: string | RegExp, flags?: string): RegExp {
   if (pattern instanceof RegExp) return pattern;
+  // SECURITY: validasi pattern sebelum kompilasi — cegah ReDoS dan pattern terlalu panjang
+  validateRegex(pattern);
   const cacheKey = `${pattern}::${flags ?? ''}`;
   let re = _regexCache.get(cacheKey);
   if (!re) {
@@ -45,6 +48,17 @@ function _getOrCompileRegex(pattern: string | RegExp, flags?: string): RegExp {
  */
 export function matchFilter(doc: Record<string, unknown>, filter: QueryFilter): boolean {
   for (const [key, condition] of Object.entries(filter)) {
+    // SECURITY: blokir prototype pollution via filter key
+    if (isDangerousKey(key))
+      throw new Error(`[OvnDB] Filter mengandung kunci terlarang: "${key}"`);
+
+    // SECURITY: $where — arbitrary code execution, dilarang
+    if (key === '$where')
+      throw new Error('[OvnDB] Operator $where tidak diperbolehkan');
+
+    // v4.0: $text adalah handled by _scanWithPlan before matchFilter — skip here
+    if (key === '$text') continue;
+
     if (key === '$and') {
       if (!(condition as QueryFilter[]).every(f => matchFilter(doc, f))) return false;
     } else if (key === '$or') {
@@ -54,6 +68,11 @@ export function matchFilter(doc: Record<string, unknown>, filter: QueryFilter): 
     } else if (key === '$not') {
       if (matchFilter(doc, condition as QueryFilter)) return false;
     } else {
+      // SECURITY: validasi tiap segmen dot-notation field path
+      for (const part of key.split('.')) {
+        if (isDangerousKey(part))
+          throw new Error(`[OvnDB] Field path mengandung kunci terlarang: "${part}"`);
+      }
       const fieldVal = getFieldValue(doc, key);
       if (!matchField(fieldVal, condition as Scalar | FieldOps)) return false;
     }
@@ -66,6 +85,8 @@ export function getFieldValue(doc: Record<string, unknown>, path: string): unkno
   const parts = path.split('.');
   let val: unknown = doc;
   for (const part of parts) {
+    // SECURITY: blokir prototype pollution traversal
+    if (isDangerousKey(part)) return undefined;
     if (val === null || typeof val !== 'object') return undefined;
     val = (val as Record<string, unknown>)[part];
   }
@@ -87,8 +108,18 @@ function matchField(val: unknown, condition: Scalar | FieldOps): boolean {
   if ('$gte' in ops && !(typeof val === typeof ops.$gte && (val as number) >= (ops.$gte as number))) return false;
   if ('$lt'  in ops && !(typeof val === typeof ops.$lt && (val as number) < (ops.$lt as number)))   return false;
   if ('$lte' in ops && !(typeof val === typeof ops.$lte && (val as number) <= (ops.$lte as number))) return false;
-  if ('$in'  in ops && !((ops.$in as Scalar[]).includes(val as Scalar)))  return false;
-  if ('$nin' in ops && (ops.$nin as Scalar[]).includes(val as Scalar))    return false;
+  if ('$in'  in ops) {
+    const arr = ops.$in as Scalar[];
+    if (!Array.isArray(arr))  return false;
+    if (arr.length > 1_000)   throw new Error('[OvnDB] $in terlalu banyak elemen (maks 1000)');
+    if (!arr.includes(val as Scalar)) return false;
+  }
+  if ('$nin' in ops) {
+    const arr = ops.$nin as Scalar[];
+    if (!Array.isArray(arr))  return false;
+    if (arr.length > 1_000)   throw new Error('[OvnDB] $nin terlalu banyak elemen (maks 1000)');
+    if (arr.includes(val as Scalar)) return false;
+  }
   if ('$exists' in ops && (val !== undefined) !== ops.$exists)            return false;
 
   if ('$regex' in ops) {
@@ -133,12 +164,12 @@ function matchField(val: unknown, condition: Scalar | FieldOps): boolean {
     if (actual !== expected) return false;
   }
 
-  // G10: $where — evaluasi fungsi predikat kustom
+  // G10: $where — DILARANG: arbitrary code execution risk
+  // Operator ini memungkinkan caller mengeksekusi fungsi arbitrer dengan akses
+  // ke nilai field dokumen. Ini adalah celah eksekusi kode yang tidak dapat ditoleransi
+  // di database embedded. Operator dihapus dari implementasi.
   if ('$where' in ops) {
-    const predicate = (ops as Record<string, unknown>)['$where'];
-    if (typeof predicate === 'function') {
-      try { if (!predicate(val)) return false; } catch { return false; }
-    }
+    throw new Error('[OvnDB] Operator $where tidak diperbolehkan');
   }
 
   // G10: $mod — modulo check: [divisor, remainder]
@@ -282,8 +313,11 @@ export function applyUpdate(doc: Record<string, unknown>, spec: UpdateSpec): Rec
 // ── Dot Notation Helpers ─────────────────────────────────────
 
 export function getNestedField(obj: Record<string, unknown>, path: string): unknown {
-  return path.split('.').reduce<unknown>((o, k) =>
-    o !== null && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined, obj);
+  return path.split('.').reduce<unknown>((o, k) => {
+    // SECURITY: blokir prototype pollution traversal
+    if (isDangerousKey(k)) return undefined;
+    return o !== null && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined;
+  }, obj);
 }
 
 export function setNestedField(obj: Record<string, unknown>, path: string, val: unknown): void {
@@ -291,10 +325,17 @@ export function setNestedField(obj: Record<string, unknown>, path: string, val: 
   let cur: Record<string, unknown> = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i]!;
+    // SECURITY: tolak kunci berbahaya di setiap segmen path
+    if (isDangerousKey(p))
+      throw new Error(`[OvnDB] Field path mengandung kunci terlarang: "${p}"`);
     if (typeof cur[p] !== 'object' || cur[p] === null) cur[p] = {};
     cur = cur[p] as Record<string, unknown>;
   }
-  cur[parts[parts.length - 1]!] = val;
+  const lastKey = parts[parts.length - 1]!;
+  // SECURITY: tolak kunci berbahaya pada segmen akhir
+  if (isDangerousKey(lastKey))
+    throw new Error(`[OvnDB] Field path mengandung kunci terlarang: "${lastKey}"`);
+  cur[lastKey] = val;
 }
 
 export function deleteNestedField(obj: Record<string, unknown>, path: string): void {
@@ -302,10 +343,15 @@ export function deleteNestedField(obj: Record<string, unknown>, path: string): v
   let cur: Record<string, unknown> = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i]!;
+    // SECURITY: tolak kunci berbahaya di setiap segmen path
+    if (isDangerousKey(p)) return;
     if (typeof cur[p] !== 'object' || cur[p] === null) return;
     cur = cur[p] as Record<string, unknown>;
   }
-  delete cur[parts[parts.length - 1]!];
+  const lastKey = parts[parts.length - 1]!;
+  // SECURITY: tolak kunci berbahaya pada segmen akhir
+  if (isDangerousKey(lastKey)) return;
+  delete cur[lastKey];
 }
 
 // ── Projection ────────────────────────────────────────────────

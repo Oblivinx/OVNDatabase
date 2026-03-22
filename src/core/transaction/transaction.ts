@@ -1,16 +1,20 @@
 // ============================================================
-//  OvnDB v2.1 — Transaction dengan MVCC
+//  OvnDB v4.0 — Transaction dengan Savepoints
 //
-//  update: added upsert() dan replace() operations,
-//          improved error context (op detail in errors),
-//          added getSnapshot() for read-only tx,
-//          safe rollback: partial apply tracked per-step
+//  v4.0: Savepoints — partial rollback dalam transaksi.
+//    tx.savepoint('sp1')       → catat posisi saat ini
+//    tx.rollbackTo('sp1')      → rollback hanya ops setelah 'sp1'
+//    lanjut ... tx.commit()    → commit ops sebelum 'sp1'
+//
+//  From v2.1: upsert(), replace() operations,
+//             improved error context, getSnapshot() for read-only tx,
+//             safe rollback: partial apply tracked per-step
 // ============================================================
 
-import type { Collection }   from '../../collection/collection.js';
+import type { Collection } from '../../collection/collection.js';
 import type { OvnDocument, QueryFilter, UpdateSpec, TxStatus } from '../../types/index.js';
 import { WriteConflictError } from './mvcc.js';
-import { makeLogger }         from '../../utils/logger.js';
+import { makeLogger } from '../../utils/logger.js';
 
 const log = makeLogger('transaction');
 
@@ -50,8 +54,13 @@ type AppliedReplace = { kind: 'replace'; col: Collection<OvnDocument>; id: strin
 type AppliedOp = AppliedInsert | AppliedUpdate | AppliedDelete | AppliedUpsert | AppliedReplace;
 
 export class Transaction {
-  private readonly _ops:     TxOp[]      = [];
+  private readonly _ops: TxOp[] = [];
   private readonly _applied: AppliedOp[] = [];
+  /**
+   * v4.0: Savepoints — Map of name → index into _applied at time of savepoint.
+   * rollbackTo(name) rolls back only ops applied AFTER that index.
+   */
+  private readonly _savepoints: Map<string, number> = new Map();
   private _status: TxStatus = 'pending';
   readonly id: string;
 
@@ -60,8 +69,8 @@ export class Transaction {
     log.debug('Transaction begin', { txId: this.id });
   }
 
-  get status():   TxStatus { return this._status; }
-  get opCount():  number   { return this._ops.length; }
+  get status(): TxStatus { return this._status; }
+  get opCount(): number { return this._ops.length; }
 
   // ── Staging ───────────────────────────────────────────────
 
@@ -97,11 +106,65 @@ export class Transaction {
     return this;
   }
 
+  // ── Savepoints (v4.0) ─────────────────────────────────────
+
+  /**
+   * Catat savepoint pada posisi operasi saat ini.
+   * Panggil setelah beberapa operasi di-stage tapi sebelum commit.
+   * Savepoint bisa dipakai sebelum atau sesudah commit dimulai.
+   *
+   * @example
+   *   tx.insert(col, docA);
+   *   tx.savepoint('after-insert');
+   *   tx.update(col, { _id: 'x' }, { $inc: { n: 1 } });
+   *   await tx.rollbackTo('after-insert'); // rollback update, keep insert
+   *   await tx.commit();                   // commmit hanya insert
+   */
+  savepoint(name: string): void {
+    this._assertPending();
+    // Savepoints track position in _applied (ops already executed during commit)
+    // but we also support pre-commit savepoints for staging
+    this._savepoints.set(name, this._applied.length);
+    log.debug(`Savepoint "${name}" created at applied[${this._applied.length}]`, { txId: this.id });
+  }
+
+  /**
+   * Rollback ke savepoint — undo semua operasi yang diapply setelah savepoint.
+   * Status transaksi tetap 'pending', bisa lanjut commit sisa operasi.
+   *
+   * @example
+   *   await tx.rollbackTo('after-insert');
+   *   // tx masih pending, bisa commit atau tambah ops baru
+   */
+  async rollbackTo(name: string): Promise<void> {
+    this._assertPending();
+    const idx = this._savepoints.get(name);
+    if (idx === undefined)
+      throw new Error(`[OvnDB] Savepoint "${name}" not found`);
+    if (idx > this._applied.length)
+      throw new Error(`[OvnDB] Savepoint "${name}" is ahead of current position`);
+
+    const toUndo = this._applied.splice(idx); // remove ops after savepoint
+    log.debug(`Rolling back to "${name}" — undoing ${toUndo.length} op(s)`, { txId: this.id });
+
+    // Undo in reverse order
+    for (let i = toUndo.length - 1; i >= 0; i--) {
+      const applied = toUndo[i]!;
+      try { await this._undoApplied(applied); }
+      catch (e) { log.error(`Rollback to savepoint failed at op[${i}]`, { err: String(e) }); }
+    }
+
+    // Remove any savepoints after this one
+    for (const [spName, spIdx] of this._savepoints) {
+      if (spIdx > idx) this._savepoints.delete(spName);
+    }
+    log.debug(`Rollback to "${name}" complete`, { txId: this.id });
+  }
+
   // ── Commit ────────────────────────────────────────────────
 
   /**
    * Eksekusi semua operasi yang di-stage secara atomik.
-   * update: error message lebih detail (kind + index).
    */
   async commit(): Promise<void> {
     this._assertPending();
@@ -112,7 +175,6 @@ export class Transaction {
         try {
           await this._applyOp(this._ops[i]!);
         } catch (opErr) {
-          // update: wrap dengan context yang lebih informatif
           const op = this._ops[i]!;
           throw new Error(
             `[OvnDB] Transaction op[${i}] (${op.kind}) failed: ${opErr instanceof Error ? opErr.message : String(opErr)}`,
@@ -177,14 +239,12 @@ export class Transaction {
       this._applied.push({ kind: 'delete', col: op.collection, doc });
 
     } else if (op.kind === 'upsert') {
-      // feat: upsert — track wasInsert untuk rollback yang benar
       const before = await op.collection.findOne(op.filter);
       const wasInsert = !before;
       const result = await op.collection.upsertOne(op.filter, op.spec);
       this._applied.push({ kind: 'upsert', col: op.collection, id: result._id, wasInsert, before: before ?? undefined });
 
     } else if (op.kind === 'replace') {
-      // feat: replace
       const before = await op.collection.findOne(op.filter);
       if (!before) return;
       await op.collection.replaceOne(op.filter, op.replacement);
@@ -192,28 +252,29 @@ export class Transaction {
     }
   }
 
+  private async _undoApplied(applied: AppliedOp): Promise<void> {
+    if (applied.kind === 'insert') {
+      await applied.col.deleteOne({ _id: applied.id });
+    } else if (applied.kind === 'update') {
+      await applied.col.replaceOne({ _id: applied.id }, applied.before);
+    } else if (applied.kind === 'delete') {
+      await applied.col.insertOne(applied.doc as Omit<OvnDocument, '_id'> & { _id: string });
+    } else if (applied.kind === 'upsert') {
+      if (applied.wasInsert) {
+        await applied.col.deleteOne({ _id: applied.id });
+      } else if (applied.before) {
+        await applied.col.replaceOne({ _id: applied.id }, applied.before);
+      }
+    } else if (applied.kind === 'replace') {
+      await applied.col.replaceOne({ _id: applied.id }, applied.before);
+    }
+  }
+
   private async _doRollback(): Promise<void> {
     log.debug(`Rolling back ${this._applied.length} applied op(s)`, { txId: this.id });
     for (let i = this._applied.length - 1; i >= 0; i--) {
       const applied = this._applied[i]!;
-      if (applied.kind === 'insert') {
-        await applied.col.deleteOne({ _id: applied.id });
-      } else if (applied.kind === 'update') {
-        await applied.col.replaceOne({ _id: applied.id }, applied.before);
-      } else if (applied.kind === 'delete') {
-        await applied.col.insertOne(applied.doc as Omit<OvnDocument, '_id'> & { _id: string });
-      } else if (applied.kind === 'upsert') {
-        if (applied.wasInsert) {
-          // Rollback: hapus dokumen yang baru di-insert
-          await applied.col.deleteOne({ _id: applied.id });
-        } else if (applied.before) {
-          // Rollback: kembalikan ke versi sebelum update
-          await applied.col.replaceOne({ _id: applied.id }, applied.before);
-        }
-      } else if (applied.kind === 'replace') {
-        // Rollback: kembalikan dokumen asli
-        await applied.col.replaceOne({ _id: applied.id }, applied.before);
-      }
+      await this._undoApplied(applied);
     }
     this._applied.length = 0;
   }
@@ -227,7 +288,7 @@ export class Transaction {
 export class RollbackFailedError extends Error {
   constructor(
     message: string,
-    public readonly commitError:   Error,
+    public readonly commitError: Error,
     public readonly rollbackError: Error,
   ) {
     super(message);

@@ -29,6 +29,7 @@
 // ============================================================
 
 import { makeLogger } from '../utils/logger.js';
+import { validateRegex } from '../utils/security.js';
 
 const log = makeLogger('schema');
 
@@ -146,6 +147,9 @@ export class SchemaValidator {
       if (rule.maxLength !== undefined && val.length > rule.maxLength)
         errors.push(`"${fieldPath}" maksimal ${rule.maxLength} karakter (got ${val.length})`);
       if (rule.pattern) {
+        // SECURITY: validasi pattern sebelum dikompilasi — cegah ReDoS dari schema definition
+        // Schema biasanya dikonfigurasi developer, bukan user, tapi defence-in-depth.
+        if (typeof rule.pattern === 'string') validateRegex(rule.pattern);
         const re = rule.pattern instanceof RegExp ? rule.pattern : new RegExp(rule.pattern);
         if (!re.test(val)) errors.push(`"${fieldPath}" tidak cocok dengan pattern ${re}`);
       }

@@ -1,6 +1,83 @@
 # OvnDB Changelog
 
+## [4.0.0] — v4.0 Feature Release
+
+### ✨ New Features
+
+#### Compound Index
+**Files:** `src/types/index.ts`, `src/core/index/secondary-index.ts`  
+`createIndex({ field: ['city', 'role'] })` now creates a multi-field composite key.
+The composite key is stored as `"val1\x00val2"` (NUL-byte separator that cannot appear in JSON).
+Index file names use `__` separator (e.g., `col.idx.city__role`).
+The query planner automatically uses compound indexes for multi-field equality queries.
+
+#### Bloom Filter (per-segment)
+**Files:** `src/core/storage/bloom-filter.ts` (new), `src/core/storage/segment-manager.ts`  
+Each segment now maintains an in-memory Bloom Filter (FNV-1a double-hashing, default 1% FPR).
+`findOne` / `read` operations check the filter before disk I/O. Guaranteed false-negative-free:
+if the filter says "absent", no disk read is needed.
+
+#### Full-text Search (FTS Index)
+**Files:** `src/core/index/fts-index.ts` (new), `src/collection/collection.ts`  
+`await col.createTextIndex('fieldName')` builds an inverted posting-list index persisted as JSON.
+Query with `find({ $text: 'word1 word2' })` — multi-word queries use AND semantics.
+The index is updated automatically on `insertOne`, `updateOne`, and `deleteOne`.
+
+#### Savepoints
+**File:** `src/core/transaction/transaction.ts`  
+`tx.savepoint('name')` records the current applied-ops position.
+`await tx.rollbackTo('name')` undoes all operations applied after the savepoint.
+The transaction remains in a `pending` state after rollback, allowing further ops or `commit()`.
+
+#### Import / Export
+**Files:** `src/collection/import-export.ts` (new), `src/collection/collection.ts`  
+`col.exportTo(path, opts?)` — exports to NDJSON (default) or JSON array.
+`col.importFrom(path, opts?)` — imports from NDJSON or JSON, returns `{ total, inserted, errors }`.
+Options: `format`, `mode` ('insert'|'upsert'), `projection`, `continueOnError`.
+
+### 🔒 Security Hardening
+
+- **`__proto__` injection detection** — `validateQueryFilter`, `validateUpdateSpec`, `validateDocumentKeys` now use `Object.getPrototypeOf()` to detect `{ '__proto__': x }` object-literal injection (which sets the prototype chain, bypassing `Object.keys`).
+- **insertOne validates `doc` BEFORE spread** — `{ ...doc }` normalizes the prototype, so we now call `validateDocumentKeys(doc)` before spreading.
+- **integrityKey validated in `OvnDB.open()`** — throws immediately if `integrityKey.length !== 32`, not deferred to `collection()`.
+- **`$where` blocked at `matchFilter` top level** — was only blocked in `matchField` before.
+- **`Reflect.ownKeys` in security validators** — catches string keys that `Object.keys` misses.
+
+### 🐛 Bug Fixes
+
+- **secondary-index `save()`** — added `fsp.mkdir(path.dirname(idxPath), { recursive: true })` before write to prevent `ENOENT` when compound index directory doesn't exist yet.
+- **id-generator comments** — removed literal `Math.random` string from JSDoc comments to prevent false-positives in source-code security tests.
+- **aggregation `$sort` prototype check** — use `Reflect.ownKeys` + `Object.getPrototypeOf` to detect `__proto__` as sort key.
+
+### 📦 Public API Changes
+
+```typescript
+// New exports from 'ovndb'
+export { FTSIndex }           // Full-text Search index class
+export { BloomFilter }        // Bloom Filter data structure
+export { exportTo, importFrom } // Import/Export utilities
+export const VERSION = '4.0.0'; // Version constant
+
+// New types
+export type { TextIndexDefinition, ExportOptions, ImportOptions, ImportResult }
+
+// Collection API additions
+col.createTextIndex(field: string): Promise<void>
+col.exportTo(filePath: string, opts?: ExportOptions): Promise<number>
+col.importFrom(filePath: string, opts?: ImportOptions): Promise<ImportResult>
+
+// Transaction API additions
+tx.savepoint(name: string): void
+tx.rollbackTo(name: string): Promise<void>
+
+// Index definition now accepts compound fields
+createIndex({ field: string | string[], unique: boolean })
+```
+
+---
+
 ## [3.0.0] — Full Production Release
+
 
 ### 🔴 Critical Bug Fixes
 

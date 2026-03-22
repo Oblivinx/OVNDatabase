@@ -89,31 +89,53 @@ export class CryptoLayer {
 
   /**
    * G13: Detect format otomatis (v2 28 bytes overhead vs v3 29 bytes).
-   * Jika byte pertama adalah valid JSON start ({, [, "), bisa jadi plaintext.
+   *
+   * SECURITY FIX: Heuristic lama `ciphertext[0]! <= MAX_KEY_VERSION` selalu
+   * bernilai true karena MAX_KEY_VERSION = 255 dan semua byte adalah <= 255.
+   * Akibatnya semua ciphertext v2 (overhead 28 byte) salah-diparse sebagai v3
+   * (overhead 29 byte), menghasilkan IV/tag dari offset yang salah → decrypt
+   * selalu gagal untuk data yang ditulis versi lama.
+   *
+   * Fix: format v3 hanya dipakai jika panjang ciphertext > CRYPTO_OVERHEAD_V2
+   * (artinya ada setidaknya 1 byte ekstra di depan untuk version byte).
+   * Ini adalah kondisi yang perlu DAN cukup untuk membedakan v2 dari v3,
+   * karena ciphertext v2 dengan panjang tepat CRYPTO_OVERHEAD_V2 + N byte
+   * plaintext tidak akan memiliki byte "ekstra" di posisi 0.
+   *
+   * Catatan: Untuk plaintext kosong (N=0), v2 = 28 bytes, v3 = 29 bytes.
+   * Ambiguitas hanya terjadi pada plaintext 0 byte (sangat jarang untuk JSON doc).
+   * Dalam kasus tersebut kita gunakan tryV3 → fallback tryV2.
    */
   decrypt(ciphertext: Buffer): Buffer {
     if (ciphertext.length < CRYPTO_OVERHEAD_V2)
       throw new Error('[CryptoLayer] Ciphertext terlalu pendek');
 
-    // G13: cek apakah format v3 (dengan key version byte)
-    // Heuristic: jika panjang >= CRYPTO_OVERHEAD (29), dan byte pertama <= MAX_KEY_VERSION
-    const hasVersionByte = ciphertext.length >= CRYPTO_OVERHEAD &&
-      ciphertext[0]! <= MAX_KEY_VERSION;
+    // Format v3 tepat 1 byte lebih panjang dari v2 untuk payload yang sama.
+    // Kita coba v3 dulu jika panjang memungkinkan, lalu fallback ke v2.
+    const canBeV3 = ciphertext.length > CRYPTO_OVERHEAD_V2;
 
-    const iv: Buffer  = hasVersionByte
-      ? ciphertext.subarray(KEY_VERSION_SIZE, KEY_VERSION_SIZE + IV_SIZE)
-      : ciphertext.subarray(0, IV_SIZE);
-    const tag: Buffer = hasVersionByte
-      ? ciphertext.subarray(KEY_VERSION_SIZE + IV_SIZE, KEY_VERSION_SIZE + IV_SIZE + TAG_SIZE)
-      : ciphertext.subarray(IV_SIZE, IV_SIZE + TAG_SIZE);
-    const ct: Buffer  = hasVersionByte
-      ? ciphertext.subarray(KEY_VERSION_SIZE + IV_SIZE + TAG_SIZE)
-      : ciphertext.subarray(IV_SIZE + TAG_SIZE);
+    if (canBeV3) {
+      // Coba parse sebagai v3: [1 ver][12 IV][16 Tag][N CT]
+      try {
+        const iv     = ciphertext.subarray(KEY_VERSION_SIZE, KEY_VERSION_SIZE + IV_SIZE);
+        const tag    = ciphertext.subarray(KEY_VERSION_SIZE + IV_SIZE, KEY_VERSION_SIZE + IV_SIZE + TAG_SIZE);
+        const ct     = ciphertext.subarray(KEY_VERSION_SIZE + IV_SIZE + TAG_SIZE);
+        const dec    = crypto.createDecipheriv(ALG, this.key, iv);
+        dec.setAuthTag(tag);
+        return Buffer.concat([dec.update(ct), dec.final()]);
+      } catch {
+        // v3 parse gagal → coba v2 sebagai fallback (data mungkin ditulis versi lama)
+      }
+    }
 
-    const decipher = crypto.createDecipheriv(ALG, this.key, iv);
-    decipher.setAuthTag(tag);
+    // Parse sebagai v2: [12 IV][16 Tag][N CT]
+    const iv  = ciphertext.subarray(0, IV_SIZE);
+    const tag = ciphertext.subarray(IV_SIZE, IV_SIZE + TAG_SIZE);
+    const ct  = ciphertext.subarray(IV_SIZE + TAG_SIZE);
+    const dec = crypto.createDecipheriv(ALG, this.key, iv);
+    dec.setAuthTag(tag);
     try {
-      return Buffer.concat([decipher.update(ct), decipher.final()]);
+      return Buffer.concat([dec.update(ct), dec.final()]);
     } catch {
       throw new Error('[CryptoLayer] Dekripsi gagal — data corrupt, tampered, atau key salah');
     }

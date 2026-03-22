@@ -15,8 +15,8 @@
 //  - open(): bersihkan .wal.new stale dari crash sebelumnya
 // ============================================================
 
-import fs   from 'fs';
-import fsp  from 'fs/promises';
+import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import {
   WAL_MAGIC, WAL_GROUP_SIZE, WAL_GROUP_WAIT_MS, WalOp,
@@ -29,34 +29,34 @@ const log = makeLogger('wal');
 
 export interface WalEntry {
   seqno: bigint;
-  op:    WalOp;
-  key:   string;
-  data:  Buffer;
-  txId:  bigint;
+  op: WalOp;
+  key: string;
+  data: Buffer;
+  txId: bigint;
 }
 
 interface PendingGroup {
-  entries:   Buffer[];
+  entries: Buffer[];
   resolvers: Array<() => void>;
   rejecters: Array<(e: Error) => void>;
 }
 
 export class WAL {
-  private readonly dirPath:    string;
-  private readonly colName:    string;
-  private filePath:            string;
-  private fd:            number | null = null;
-  private seqno:         bigint = 0n;
-  private writePos:      number = 0;
+  private readonly dirPath: string;
+  private readonly colName: string;
+  private filePath: string;
+  private fd: number | null = null;
+  private seqno: bigint = 0n;
+  private writePos: number = 0;
   private _pendingCount: number = 0;
 
-  private group:       PendingGroup = { entries: [], resolvers: [], rejecters: [] };
-  private groupTimer:  ReturnType<typeof setTimeout> | null = null;
-  private _committing  = false;
+  private group: PendingGroup = { entries: [], resolvers: [], rejecters: [] };
+  private groupTimer: ReturnType<typeof setTimeout> | null = null;
+  private _committing = false;
 
   constructor(dirPath: string, collectionName: string) {
-    this.dirPath  = dirPath;
-    this.colName  = collectionName;
+    this.dirPath = dirPath;
+    this.colName = collectionName;
     this.filePath = path.join(dirPath, `${collectionName}.wal`);
   }
 
@@ -69,12 +69,14 @@ export class WAL {
       log.warn('Found stale .wal.new from previous crash — removing', { col: this.colName });
       fs.unlinkSync(newPath);
     }
-    if (!fs.existsSync(this.filePath)) fs.writeFileSync(this.filePath, Buffer.alloc(0));
-    this.fd       = fs.openSync(this.filePath, 'r+');
+    // SECURITY: mode 0o600 — WAL berisi plaintext data sebelum di-encrypt ke segment
+    if (!fs.existsSync(this.filePath))
+      fs.writeFileSync(this.filePath, Buffer.alloc(0), { mode: 0o600 });
+    this.fd = fs.openSync(this.filePath, 'r+');
     // G6: replay dengan TX_ABORT awareness
     const entries = this._replay();
     this.writePos = fs.fstatSync(this.fd).size;
-    log.debug(`WAL opened, ${entries.length} entries to replay`, { file: this.filePath });
+    log.debug(`WAL opened, ${entries.length} entries to replay`);
     return entries;
   }
 
@@ -86,22 +88,36 @@ export class WAL {
 
   // ── Append ────────────────────────────────────────────────
 
+  // SECURITY: WAL_KEY_MAX_LEN — uint16 field bisa menampung key hingga 65535 byte.
+  // Tanpa batas, caller bisa menulis key 64 KB per entri dan menguras disk/RAM WAL.
+  // 1024 byte cukup untuk semua _id yang valid (max 128 byte per security.ts).
+  private static readonly WAL_KEY_MAX_LEN = 1024;
+  // SECURITY: WAL_DATA_MAX_LEN — document bytes sudah dibatasi di lapisan collection
+  // (MAX_DOCUMENT_BYTES = 16 MB), tapi kita guard di sini juga sebagai defence-in-depth.
+  private static readonly WAL_DATA_MAX_LEN = 32 * 1024 * 1024; // 32 MB hard cap
+
   append(op: WalOp, key: string, data: Buffer = Buffer.alloc(0), txId: bigint = 0n): Promise<void> {
     if (this.fd === null) return Promise.reject(new Error('WAL not open'));
 
-    this.seqno++;
+    // SECURITY: batasi panjang key sebelum encode dan alokasi buffer
     const keyBuf = Buffer.from(key, 'utf8');
-    const size   = 4 + 8 + 8 + 1 + 2 + keyBuf.length + 4 + data.length + 4;
-    const buf    = Buffer.allocUnsafe(size);
+    if (keyBuf.length > WAL.WAL_KEY_MAX_LEN)
+      return Promise.reject(new Error(`[WAL] Key terlalu panjang (${keyBuf.length} > maks ${WAL.WAL_KEY_MAX_LEN})`));
+    if (data.length > WAL.WAL_DATA_MAX_LEN)
+      return Promise.reject(new Error(`[WAL] Data terlalu besar (${data.length} > maks ${WAL.WAL_DATA_MAX_LEN})`));
+
+    this.seqno++;
+    const size = 4 + 8 + 8 + 1 + 2 + keyBuf.length + 4 + data.length + 4;
+    const buf = Buffer.allocUnsafe(size);
     let p = 0;
-    WAL_MAGIC.copy(buf, p);               p += 4;
-    buf.writeBigUInt64LE(this.seqno, p);  p += 8;
-    buf.writeBigUInt64LE(txId, p);        p += 8;
-    buf.writeUInt8(op, p);                p += 1;
-    buf.writeUInt16LE(keyBuf.length, p);  p += 2;
-    keyBuf.copy(buf, p);                  p += keyBuf.length;
-    buf.writeUInt32LE(data.length, p);    p += 4;
-    data.copy(buf, p);                    p += data.length;
+    WAL_MAGIC.copy(buf, p); p += 4;
+    buf.writeBigUInt64LE(this.seqno, p); p += 8;
+    buf.writeBigUInt64LE(txId, p); p += 8;
+    buf.writeUInt8(op, p); p += 1;
+    buf.writeUInt16LE(keyBuf.length, p); p += 2;
+    keyBuf.copy(buf, p); p += keyBuf.length;
+    buf.writeUInt32LE(data.length, p); p += 4;
+    data.copy(buf, p); p += data.length;
     writeCrc(buf, p, crc32(buf.subarray(0, p)));
     this._pendingCount++;
 
@@ -127,7 +143,7 @@ export class WAL {
     if (this.writePos === 0 && this._pendingCount === 0) return;
     fs.ftruncateSync(this.fd, 0);
     fs.fdatasyncSync(this.fd);
-    this.writePos      = 0;
+    this.writePos = 0;
     this._pendingCount = 0;
     log.debug('WAL checkpointed');
   }
@@ -177,7 +193,8 @@ export class WAL {
     const newPath = this.filePath + '.new';
     // Hapus .new stale dari crash sebelumnya jika ada
     if (fs.existsSync(newPath)) fs.unlinkSync(newPath);
-    const newFd = fs.openSync(newPath, 'w+');
+    // SECURITY: mode 0o600 — file WAL baru
+    const newFd = fs.openSync(newPath, 'w+', 0o600);
     fs.fdatasyncSync(newFd);
     fs.closeSync(newFd);
 
@@ -195,21 +212,36 @@ export class WAL {
     fs.renameSync(newPath, this.filePath);
 
     // Step 5: Buka .wal baru
-    this.fd       = fs.openSync(this.filePath, 'r+');
+    this.fd = fs.openSync(this.filePath, 'r+');
     this.writePos = 0;
     // Seqno tetap lanjut agar tidak ada konflik
-    log.info('WAL rotated (crash-safe)', { col: this.colName, bakPath });
+    // SECURITY: tidak log path file agar tidak ada informasi filesystem di output
+    log.info('WAL rotated (crash-safe)', { col: this.colName });
   }
 
   /**
    * G6: Replay dengan TX_ABORT awareness.
    * Operasi dari transaksi yang di-abort TIDAK di-replay.
+   *
+   * SECURITY: replay juga memvalidasi keyLen dan dataLen sebelum alokasi
+   * untuk mencegah corrupt WAL menyebabkan giant buffer allocation / OOM.
    */
   private _replay(): WalEntry[] {
     if (!this.fd) return [];
     const stat = fs.fstatSync(this.fd);
     if (stat.size === 0) return [];
-    const raw  = Buffer.allocUnsafe(stat.size);
+
+    // SECURITY: cap total WAL size yang dibaca ke 2× WAL_MAX_SIZE_BYTES
+    // Jika file lebih besar, kemungkinan corrupt — hentikan replay dengan aman.
+    const MAX_REPLAY_BYTES = WAL_MAX_SIZE_BYTES * 2;
+    if (stat.size > MAX_REPLAY_BYTES) {
+      log.warn(`WAL file terlalu besar (${stat.size} bytes) — skipping replay, menganggap checkpoint`, {
+        col: this.colName,
+      });
+      return [];
+    }
+
+    const raw = Buffer.allocUnsafe(stat.size);
     fs.readSync(this.fd, raw, 0, stat.size, 0);
 
     const all: WalEntry[] = [];
@@ -220,17 +252,31 @@ export class WAL {
       if (raw.length - pos < 24) break;
       if (!raw.subarray(pos, pos + 4).equals(WAL_MAGIC)) break;
       pos += 4;
-      const seqno   = raw.readBigUInt64LE(pos); pos += 8;
-      const txId    = raw.readBigUInt64LE(pos);  pos += 8;
-      const op      = raw.readUInt8(pos) as WalOp; pos += 1;
-      const keyLen  = raw.readUInt16LE(pos); pos += 2;
+      const seqno = raw.readBigUInt64LE(pos); pos += 8;
+      const txId = raw.readBigUInt64LE(pos); pos += 8;
+      const op = raw.readUInt8(pos) as WalOp; pos += 1;
+      const keyLen = raw.readUInt16LE(pos); pos += 2;
+
+      // SECURITY: sanity-check keyLen sebelum alokasi string
+      if (keyLen > WAL.WAL_KEY_MAX_LEN) {
+        log.warn(`WAL replay: keyLen ${keyLen} melebihi batas, stopping at pos ${start}`);
+        break;
+      }
+
       if (pos + keyLen > raw.length) break;
-      const key     = raw.toString('utf8', pos, pos + keyLen); pos += keyLen;
+      const key = raw.toString('utf8', pos, pos + keyLen); pos += keyLen;
       if (pos + 4 > raw.length) break;
       const dataLen = raw.readUInt32LE(pos); pos += 4;
+
+      // SECURITY: sanity-check dataLen sebelum alokasi buffer
+      if (dataLen > WAL.WAL_DATA_MAX_LEN) {
+        log.warn(`WAL replay: dataLen ${dataLen} melebihi batas, stopping at pos ${start}`);
+        break;
+      }
+
       if (pos + dataLen + 4 > raw.length) break;
-      const data    = raw.subarray(pos, pos + dataLen); pos += dataLen;
-      const stored  = readCrc(raw, pos); pos += 4;
+      const data = raw.subarray(pos, pos + dataLen); pos += dataLen;
+      const stored = readCrc(raw, pos); pos += 4;
 
       if (stored !== crc32(raw.subarray(start, pos - 4))) {
         log.warn('WAL CRC mismatch, stopping replay at pos ' + start);
@@ -260,9 +306,9 @@ export class WAL {
 
     return toReplay.filter(e =>
       e.op !== WalOp.CHECKPOINT &&
-      e.op !== WalOp.TX_BEGIN   &&
-      e.op !== WalOp.TX_COMMIT  &&
-      e.op !== WalOp.TX_ABORT   &&
+      e.op !== WalOp.TX_BEGIN &&
+      e.op !== WalOp.TX_COMMIT &&
+      e.op !== WalOp.TX_ABORT &&
       !abortedTxIds.has(e.txId), // G6: skip ops dari tx yang di-abort
     );
   }

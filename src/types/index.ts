@@ -1,7 +1,7 @@
 // ============================================================
-//  OvnDB v2.1 — Document, Query DSL, & Storage Types
-//  update: BulkWriteOp, BulkWriteResult, DBStatus, CursorOptions,
-//          $setOnInsert in UpdateSpec
+//  OvnDB v4.0 — Document, Query DSL, & Storage Types
+//  v2.1: BulkWriteOp, BulkWriteResult, DBStatus, CursorOptions
+//  v4.0: Compound Index, Full-text Search ($text), Import/Export
 // ============================================================
 
 export interface OvnDocument {
@@ -63,14 +63,18 @@ export interface FieldOps {
   $size?:    number;
   $all?:     Scalar[];
   $elemMatch?: QueryFilter;
+  /** v4.0: Full-text search (use with $text at top-level filter) */
+  $text?:    never; // reserved — use top-level $text
 }
 
 export interface QueryFilter {
-  [field: string]: Scalar | FieldOps | QueryFilter[] | QueryFilter | undefined;
+  [field: string]: Scalar | FieldOps | QueryFilter[] | QueryFilter | string | undefined;
   $and?: QueryFilter[];
   $or?:  QueryFilter[];
   $nor?: QueryFilter[];
   $not?: QueryFilter;
+  /** v4.0: Full-text search query string. Example: { $text: 'budi jakarta' } */
+  $text?: string;
 }
 
 export interface QueryOptions {
@@ -137,10 +141,43 @@ export interface OvnStats {
 }
 
 export interface IndexDefinition {
-  field:    string;
+  /** Single field or array of fields for compound index. Example: ['city', 'role'] */
+  field:    string | string[];
   unique:   boolean;
   sparse?:  boolean;
   partial?: QueryFilter;
+  /** v4.0: Additional fields to store in index for covering index queries */
+  include?: string[];
+}
+
+/** v4.0: Text index definition */
+export interface TextIndexDefinition {
+  field:    string;
+  language?: 'none'; // reserved for future language-specific stemming
+}
+
+/** v4.0: Export options */
+export interface ExportOptions {
+  format?: 'ndjson' | 'json';
+  /** Fields to include in export (default: all) */
+  projection?: Record<string, 0 | 1>;
+}
+
+/** v4.0: Import options */
+export interface ImportOptions {
+  format?: 'ndjson' | 'json';
+  /** Overwrite existing docs with same _id (default: skip) */
+  upsert?: boolean;
+  /** Continue on individual doc insert errors (default: true) */
+  continueOnError?: boolean;
+}
+
+/** v4.0: Import/Export result */
+export interface ImportResult {
+  total:    number;
+  inserted: number;
+  skipped:  number;
+  errors:   Array<{ index: number; error: string }>;
 }
 
 export type ChangeOperationType = 'insert' | 'update' | 'delete' | 'drop';

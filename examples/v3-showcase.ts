@@ -3,9 +3,9 @@
 //  Demonstrasi semua 19 gap yang sudah diperbaiki
 // ============================================================
 
-import path from 'path';
-import fsp from 'fs/promises';
-import zlib from 'zlib';
+import path   from 'path';
+import fsp    from 'fs/promises';
+import zlib   from 'zlib';
 import {
   OvnDB, field, SchemaValidator,
   cryptoFromPassphrase, FieldCrypto, CryptoLayer,
@@ -17,9 +17,9 @@ const DIR = path.join(process.cwd(), '.tmp-v3-showcase');
 // ── Schema ────────────────────────────────────────────────────
 
 const userSchema = new SchemaValidator({
-  name: field('string').required().minLength(2).build(),
-  email: field('string').required().pattern(/^[^@]+@[^@]+\.[^@]+$/).build(),
-  role: field('string').required().enum('admin', 'user', 'guest').build(),
+  name:   field('string').required().minLength(2).build(),
+  email:  field('string').required().pattern(/^[^@]+@[^@]+\.[^@]+$/).build(),
+  role:   field('string').required().enum('admin', 'user', 'guest').build(),
   points: field('number').min(0).default(0).build(),
   active: field('boolean').default(true).build(),
 });
@@ -31,7 +31,7 @@ async function main() {
   console.log('\n=== G15: Compression (gzip) ===');
   const db = await OvnDB.open(DIR, {
     gracefulShutdown: true,
-    compressFn: (buf) => zlib.gzipSync(buf),
+    compressFn:   (buf) => zlib.gzipSync(buf),
     decompressFn: (buf) => zlib.gunzipSync(buf),
   });
 
@@ -39,20 +39,20 @@ async function main() {
     _id: string; name: string; email: string; role: string; points: number; active: boolean;
   }>('users');
 
-  await users.createIndex({ field: 'email', unique: true });
-  await users.createIndex({ field: 'role', unique: false });
+  await users.createIndex({ field: 'email',  unique: true });
+  await users.createIndex({ field: 'role',   unique: false });
   await users.createIndex({ field: 'points', unique: false });
 
   // ── Insert data ───────────────────────────────────────────
   const inserted = await users.insertMany([
-    { name: 'Budi Santoso', email: 'budi@mail.com', role: 'admin', points: 1500, active: true },
-    { name: 'Siti Rahayu', email: 'siti@mail.com', role: 'user', points: 200, active: true },
-    { name: 'Ahmad Fauzi', email: 'ahmad@mail.com', role: 'user', points: 800, active: true },
-    { name: 'Dewi Lestari', email: 'dewi@mail.com', role: 'guest', points: 50, active: false },
-    { name: 'Eko Prasetyo', email: 'eko@mail.com', role: 'user', points: 2500, active: true },
-    { name: 'Farida Hanum', email: 'farida@mail.com', role: 'admin', points: 750, active: true },
-    { name: 'Gilang Ramadan', email: 'gilang@mail.com', role: 'user', points: 100, active: true },
-    { name: 'Hana Pertiwi', email: 'hana@mail.com', role: 'user', points: 3000, active: true },
+    { name: 'Budi Santoso',  email: 'budi@mail.com',  role: 'admin', points: 1500, active: true },
+    { name: 'Siti Rahayu',   email: 'siti@mail.com',  role: 'user',  points: 200,  active: true },
+    { name: 'Ahmad Fauzi',   email: 'ahmad@mail.com', role: 'user',  points: 800,  active: true },
+    { name: 'Dewi Lestari',  email: 'dewi@mail.com',  role: 'guest', points: 50,   active: false },
+    { name: 'Eko Prasetyo',  email: 'eko@mail.com',   role: 'user',  points: 2500, active: true },
+    { name: 'Farida Hanum',  email: 'farida@mail.com',role: 'admin', points: 750,  active: true },
+    { name: 'Gilang Ramadan',email: 'gilang@mail.com',role: 'user',  points: 100,  active: true },
+    { name: 'Hana Pertiwi',  email: 'hana@mail.com',  role: 'user',  points: 3000, active: true },
   ]);
   console.log(`Inserted ${inserted.length} users (data compressed with gzip)`);
 
@@ -97,9 +97,9 @@ async function main() {
   const facets = await users.aggregate([
     {
       $facet: {
-        byRole: [{ $group: { _id: '$role', count: { $sum: 1 } } }],
+        byRole:   [{ $group: { _id: '$role', count: { $sum: 1 } } }],
         topUsers: [{ $sort: { points: -1 } }, { $limit: 3 }],
-        stats: [{ $group: { _id: null, avg: { $avg: '$points' }, total: { $sum: '$points' } } }],
+        stats:    [{ $group: { _id: null, avg: { $avg: '$points' }, total: { $sum: '$points' } } }],
       }
     } as any,
   ]);
@@ -114,8 +114,8 @@ async function main() {
       $setWindowFields: {
         sortBy: { points: -1 },
         output: {
-          rank: { $rank: {} },
-          runningSum: { $sum: '$points', window: { documents: ['unbounded', 'current'] } },
+          rank:        { $rank: {} },
+          runningSum:  { $sum: '$points', window: { documents: ['unbounded', 'current'] } },
         },
       }
     } as any,
@@ -205,7 +205,7 @@ async function main() {
   // Insert banyak data — WAL akan auto-rotate jika melampaui WAL_MAX_SIZE_BYTES
   const bulkOrders = Array.from({ length: 50 }, (_, i) => ({
     userId: inserted[i % inserted.length]!._id,
-    total: Math.floor(Math.random() * 1_000_000),
+    total:  Math.floor(Math.random() * 1_000_000),
     status: ['pending', 'paid', 'shipped', 'done'][i % 4]!,
   }));
   await orders.insertMany(bulkOrders);
@@ -250,10 +250,10 @@ async function main() {
 
   console.log('\n=== All v3.0 features verified ✅ ===');
   await db.close();
-  await fsp.rm(DIR, { recursive: true, force: true });
+  await fsp.rm(DIR,           { recursive: true, force: true });
   await fsp.rm(DIR + '-backup', { recursive: true, force: true });
-  await fsp.rm(DIR + '/fieldcrypto', { recursive: true, force: true }).catch(() => { });
-  await fsp.rm(DIR + '/kv', { recursive: true, force: true }).catch(() => { });
+  await fsp.rm(DIR + '/fieldcrypto', { recursive: true, force: true }).catch(() => {});
+  await fsp.rm(DIR + '/kv',    { recursive: true, force: true }).catch(() => {});
 }
 
 main().catch(err => { console.error('FATAL:', err); process.exit(1); });

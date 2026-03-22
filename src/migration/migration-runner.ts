@@ -7,6 +7,7 @@
 
 import type { Collection }  from '../collection/collection.js';
 import type { OvnDocument, QueryFilter } from '../types/index.js';
+import { validateQueryFilter } from '../utils/security.js';
 import { makeLogger }       from '../utils/logger.js';
 
 const log = makeLogger('migration');
@@ -64,14 +65,26 @@ export class MigrationRunner<T extends OvnDocument = OvnDocument> {
     transformer:   (doc: T) => T | Promise<T>,
     options:       MigrationOptions = {},
   ): Promise<MigrationResult> {
+    // SECURITY: validasi targetVersion — harus bilangan bulat positif
+    if (!Number.isInteger(targetVersion) || targetVersion < 1)
+      throw new Error('[MigrationRunner] targetVersion harus bilangan bulat >= 1');
+
     const {
-      batchSize       = 500,
+      batchSize:       rawBatch = 500,
       dryRun          = false,
       filter          = {},
       onProgress,
       continueOnError = false,
-      timeoutMs       = 5_000,
+      timeoutMs:       rawTimeout = 5_000,
     } = options;
+
+    // SECURITY: clamp batchSize — cegah nilai 0 (infinite loop) atau sangat besar (OOM)
+    const batchSize = Math.min(Math.max(Math.floor(rawBatch), 1), 10_000);
+    // SECURITY: clamp timeoutMs — cegah timeout 0 (race condition) atau negatif
+    const timeoutMs = Math.max(rawTimeout, 100);
+
+    // SECURITY: validasi filter yang disupply user sebelum dipakai dalam migrationFilter
+    validateQueryFilter(filter);
 
     const startTime = Date.now();
     const result: MigrationResult = {

@@ -23,6 +23,7 @@
 
 import type { Collection }  from '../collection/collection.js';
 import type { OvnDocument } from '../types/index.js';
+import { validateFieldPath } from '../utils/security.js';
 import { makeLogger }       from '../utils/logger.js';
 
 const log = makeLogger('ttl');
@@ -69,9 +70,15 @@ export class TTLIndex<T extends OvnDocument = OvnDocument> {
 
   constructor(collection: Collection<T>, opts: TTLIndexOptions = {}) {
     this._col      = collection;
-    this._field    = opts.field         ?? 'expiresAt';
+    const fieldName = opts.field ?? 'expiresAt';
+    // SECURITY: validasi field path — cegah __proto__ atau path traversal
+    // TTLIndex memakai field name langsung sebagai query key; jika tidak divalidasi,
+    // opts.field = '__proto__' akan menjadi { ['__proto__']: { $lte: now } }
+    // yang berpotensi menyebabkan prototype pollution di matchFilter.
+    validateFieldPath(fieldName);
+    this._field    = fieldName;
     this._interval = Math.max(opts.checkInterval ?? 60_000, 5_000);
-    this._batch    = opts.batchSize     ?? 1_000;
+    this._batch    = Math.min(Math.max(opts.batchSize ?? 1_000, 1), 10_000);
     this._onPurge  = opts.onPurge;
   }
 
