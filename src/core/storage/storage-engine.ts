@@ -1,10 +1,10 @@
 // ============================================================
-//  OvnDB v2.1 — Storage Engine
+//  OvnDB v3.0 — Storage Engine
 //
-//  update: added deleteAll() for truncate(), forceCompact(),
-//          backup(destPath) with consistent snapshot,
-//          improved _autoCompact pointer resolution,
-//          scan() writeBuffer decrypt already worked — verified & kept
+//  G2 FIX: deleteAll() sekarang O(1) — tree.clear() + markAllDeleted()
+//  G3 FIX: autoCompact pass _id via callback bukan full tree scan O(n²)
+//  G4 FIX: writeBuffer byte limit (MAX_BUFFER_BYTES = 64MB)
+//  G15 integrate: pass compressFn/decompressFn ke SegmentManager
 // ============================================================
 
 import fs   from 'fs';
@@ -12,10 +12,10 @@ import fsp  from 'fs/promises';
 import path from 'path';
 import {
   FLUSH_INTERVAL_MS, FLUSH_THRESHOLD, BULK_FLUSH_THRESHOLD,
-  DOC_CACHE_SIZE, WalOp, COMPACTION_CHECK_MS,
+  MAX_CACHE_BYTES, MAX_BUFFER_BYTES, WalOp, COMPACTION_CHECK_MS,
 } from '../../types/constants.js';
 import type {
-  OvnDocument, RecordPointer, PendingWrite, OvnStats, IndexDefinition,
+  RecordPointer, PendingWrite, OvnStats, IndexDefinition,
 } from '../../types/index.js';
 import { LRUCache }        from '../cache/lru-cache.js';
 import { SegmentManager }  from './segment-manager.js';
@@ -30,28 +30,35 @@ const log = makeLogger('storage-engine');
 
 export class StorageEngine {
   readonly dirPath:    string;
-  private readonly colName:   string;
+  private readonly colName: string;
 
   readonly segments:    SegmentManager;
   readonly pageManager: PageManager;
   readonly tree:        PagedBPlusTree;
   readonly wal:         WAL;
   readonly mvcc:        MVCCManager;
+
+  // G1: LRU cache dengan byte limit
   private readonly cache: LRUCache<string, Buffer>;
 
   private readonly writeBuffer: Map<string, PendingWrite> = new Map();
-  private _secondaryIdx?: SecondaryIndexManager;
+  // G4: track byte usage di writeBuffer
+  private _bufferBytes = 0;
 
-  private flushTimer:     ReturnType<typeof setInterval> | null = null;
-  private compactTimer:   ReturnType<typeof setInterval> | null = null;
-  private _flushPromise:  Promise<void> | null = null;
+  private _secondaryIdx?:  SecondaryIndexManager;
+  private flushTimer:      ReturnType<typeof setInterval> | null = null;
+  private compactTimer:    ReturnType<typeof setInterval> | null = null;
+  private _flushPromise:   Promise<void> | null = null;
   private _closed = false;
   private _bulkMode = false;
 
-  /** Optional: inject decrypt function untuk enkripsi (CollectionV2). */
-  decryptFn?: (buf: Buffer) => Buffer;
+  /** G15: inject compress/decompress functions */
+  compressFn?:   (buf: Buffer) => Buffer;
+  decompressFn?: (buf: Buffer) => Buffer;
+  /** Inject decrypt function untuk CollectionV2 */
+  decryptFn?:    (buf: Buffer) => Buffer;
 
-  constructor(dirPath: string, colName: string, cacheSize = DOC_CACHE_SIZE) {
+  constructor(dirPath: string, colName: string, cacheBytes = MAX_CACHE_BYTES) {
     this.dirPath     = dirPath;
     this.colName     = colName;
     this.segments    = new SegmentManager(dirPath, colName);
@@ -59,13 +66,19 @@ export class StorageEngine {
     this.tree        = new PagedBPlusTree(this.pageManager);
     this.wal         = new WAL(dirPath, colName);
     this.mvcc        = new MVCCManager();
-    this.cache       = new LRUCache<string, Buffer>(cacheSize);
+    // G1: byte-based LRU
+    this.cache       = new LRUCache<string, Buffer>(cacheBytes);
   }
 
   // ── Lifecycle ─────────────────────────────────────────────
 
   async open(): Promise<void> {
     await fsp.mkdir(this.dirPath, { recursive: true });
+
+    // G15: propagate compression hooks ke SegmentManager sebelum open
+    if (this.compressFn)   this.segments.compressFn   = this.compressFn;
+    if (this.decompressFn) this.segments.decompressFn = this.decompressFn;
+
     await this.segments.open();
     await this.pageManager.open();
     await this.tree.init();
@@ -74,11 +87,8 @@ export class StorageEngine {
     if (walEntries.length > 0) {
       log.info(`Replaying ${walEntries.length} WAL entries`, { col: this.colName });
       for (const e of walEntries) {
-        if (e.op === WalOp.DELETE) {
-          this.writeBuffer.set(e.key, { id: e.key, data: e.data, op: WalOp.DELETE, txId: e.txId });
-        } else {
-          this.writeBuffer.set(e.key, { id: e.key, data: e.data, op: e.op, txId: e.txId });
-        }
+        this.writeBuffer.set(e.key, { id: e.key, data: e.data, op: e.op, txId: e.txId });
+        this._bufferBytes += e.data.length;
       }
       await this._doFlush();
     }
@@ -95,8 +105,7 @@ export class StorageEngine {
     (this.compactTimer as unknown as { unref?: () => void }).unref?.();
 
     log.info(`StorageEngine opened`, {
-      col:       this.colName,
-      segments:  this.segments.segmentCount,
+      col: this.colName, segments: this.segments.segmentCount,
       liveCount: String(this.segments.totalLive),
     });
   }
@@ -117,9 +126,7 @@ export class StorageEngine {
 
   // ── Secondary Index ───────────────────────────────────────
 
-  setSecondaryIndex(mgr: SecondaryIndexManager): void {
-    this._secondaryIdx = mgr;
-  }
+  setSecondaryIndex(mgr: SecondaryIndexManager): void { this._secondaryIdx = mgr; }
 
   // ── Bulk Load API ────────────────────────────────────────
 
@@ -143,27 +150,32 @@ export class StorageEngine {
     const tid = txId ?? this.mvcc.autoCommitTxId();
     this._bufferWrite(id, data, WalOp.INSERT, tid);
     const threshold = this._bulkMode ? BULK_FLUSH_THRESHOLD : FLUSH_THRESHOLD;
-    if (this.writeBuffer.size >= threshold) await this._flush();
+    if (this.writeBuffer.size >= threshold || this._bufferBytes >= MAX_BUFFER_BYTES) {
+      await this._flush();
+    }
   }
 
   async insert(id: string, data: Buffer, txId?: bigint): Promise<void> {
-    if (await this._liveExists(id))
-      throw new Error(`[OvnDB] Duplicate _id: "${id}"`);
+    if (await this._liveExists(id)) throw new Error(`[OvnDB] Duplicate _id: "${id}"`);
     const tid = txId ?? this.mvcc.autoCommitTxId();
     this.mvcc.recordWrite(tid, id);
     await this.wal.append(WalOp.INSERT, id, data, tid);
     this._bufferWrite(id, data, WalOp.INSERT, tid);
-    if (this.writeBuffer.size >= FLUSH_THRESHOLD) await this._flush();
+    // G4: flush jika melebihi count ATAU bytes threshold
+    if (this.writeBuffer.size >= FLUSH_THRESHOLD || this._bufferBytes >= MAX_BUFFER_BYTES) {
+      await this._flush();
+    }
   }
 
   async update(id: string, data: Buffer, txId?: bigint): Promise<void> {
-    if (!await this._liveExists(id))
-      throw new Error(`[OvnDB] Record not found: "${id}"`);
+    if (!await this._liveExists(id)) throw new Error(`[OvnDB] Record not found: "${id}"`);
     const tid = txId ?? this.mvcc.autoCommitTxId();
     this.mvcc.recordWrite(tid, id);
     await this.wal.append(WalOp.UPDATE, id, data, tid);
     this._bufferWrite(id, data, WalOp.UPDATE, tid);
-    if (this.writeBuffer.size >= FLUSH_THRESHOLD) await this._flush();
+    if (this.writeBuffer.size >= FLUSH_THRESHOLD || this._bufferBytes >= MAX_BUFFER_BYTES) {
+      await this._flush();
+    }
   }
 
   async upsert(id: string, data: Buffer, txId?: bigint): Promise<void> {
@@ -173,7 +185,9 @@ export class StorageEngine {
     this.mvcc.recordWrite(tid, id);
     await this.wal.append(op, id, data, tid);
     this._bufferWrite(id, data, op, tid);
-    if (this.writeBuffer.size >= FLUSH_THRESHOLD) await this._flush();
+    if (this.writeBuffer.size >= FLUSH_THRESHOLD || this._bufferBytes >= MAX_BUFFER_BYTES) {
+      await this._flush();
+    }
   }
 
   async delete(id: string, txId?: bigint): Promise<boolean> {
@@ -183,97 +197,73 @@ export class StorageEngine {
     await this.wal.append(WalOp.DELETE, id, Buffer.alloc(0), tid);
     this._bufferWrite(id, Buffer.alloc(0), WalOp.DELETE, tid);
     this.cache.delete(id);
-    if (this.writeBuffer.size >= FLUSH_THRESHOLD) await this._flush();
+    if (this.writeBuffer.size >= FLUSH_THRESHOLD || this._bufferBytes >= MAX_BUFFER_BYTES) {
+      await this._flush();
+    }
     return true;
   }
 
   /**
-   * feat: deleteAll — hapus semua record dari collection.
-   * Jauh lebih efisien dari delete per-record karena:
-   *  1. Flush buffer dulu
-   *  2. Mark semua record di semua segment sebagai DELETED
-   *  3. Clear B+ Tree
-   *  4. Clear LRU cache
-   *  5. WAL checkpoint
+   * G2: deleteAll() — O(1) path.
+   * Alih-alih loop per record, kita:
+   * 1. Flush pending buffer
+   * 2. B+ Tree.clear() — reset ke root leaf kosong (O(1))
+   * 3. SegmentManager.markAllDeleted() — set status DELETED per segment (1 pass per segment)
+   * 4. Clear LRU cache dan writeBuffer
    */
   async deleteAll(): Promise<void> {
-    // 1. Flush pending writes dulu
     if (this.writeBuffer.size > 0) await this._doFlush();
 
-    // 2. Collect semua IDs dari B+ Tree
-    const allIds: string[] = [];
-    for await (const [id] of this.tree.entries()) {
-      allIds.push(id);
-    }
+    // G7: tree.clear() O(1) via PageManager.reset()
+    await this.tree.clear();
+    // FIX: pakai markAllDeletedAsync() agar event loop tidak ter-freeze
+    // untuk collection besar. Yield setiap 1000 records + antar segment.
+    await this.segments.markAllDeletedAsync();
 
-    // 3. Delete semua dari segment & tree
-    for (const id of allIds) {
-      const ptr = await this.tree.get(id);
-      if (ptr) {
-        this.segments.deleteRecord(ptr);
-        await this.tree.delete(id);
-      }
-    }
-
-    // 4. Clear write buffer, cache
     this.writeBuffer.clear();
-    this.cache.clear?.();
+    this._bufferBytes = 0;
+    this.cache.clear();
 
-    // 5. Sync to disk
     this.segments.fdatasyncActive();
     await this.wal.checkpoint();
     await this.pageManager.flushDirty();
 
-    log.info(`deleteAll complete`, { col: this.colName, deleted: allIds.length });
+    log.info(`deleteAll complete`, { col: this.colName });
   }
 
   // ── Read API ──────────────────────────────────────────────
 
   async read(id: string): Promise<Buffer | null> {
-    // 1. Write buffer (paling fresh)
     const pending = this.writeBuffer.get(id);
     if (pending) {
       if (pending.op === WalOp.DELETE) return null;
-      // fix: decrypt jika ada decryptFn (data di writeBuffer adalah ciphertext)
+      // writeBuffer menyimpan ciphertext/compressed — perlu decrypt
       return this.decryptFn ? this.decryptFn(pending.data) : pending.data;
     }
-
-    // 2. LRU cache
     const cached = this.cache.get(id);
     if (cached) return cached;
-
-    // 3. B+ Tree → Segment
     const ptr = await this.tree.get(id);
     if (!ptr) return null;
     return this._readFromSegment(id, ptr);
   }
 
-  /**
-   * Scan seluruh collection — yield [id, Buffer] untuk setiap live record.
-   * fix: writeBuffer juga diapply decryptFn sehingga konsisten dengan
-   *      segment scan. Ini fix bug kritis di v2.0 dimana find({}) tidak
-   *      bisa membaca data fresh dari writeBuffer yang terenkripsi.
-   */
   async *scan(decryptFn?: (b: Buffer) => Buffer): AsyncIterableIterator<[string, Buffer]> {
     const seen    = new Set<string>();
-    // fix: gunakan decryptFn yang di-pass, atau fallback ke this.decryptFn
     const decrypt = decryptFn ?? this.decryptFn;
 
-    // 1. Write buffer (belum di-flush ke segment)
+    // 1. writeBuffer — paling fresh, decrypt agar konsisten
     for (const [id, pending] of this.writeBuffer) {
       seen.add(id);
       if (pending.op !== WalOp.DELETE) {
-        // fix: apply decrypt ke writeBuffer data — ini adalah fix utama v2.1
         const buf = decrypt ? decrypt(pending.data) : pending.data;
         yield [id, buf];
       }
     }
 
-    // 2. Scan segment: hanya record ACTIVE yang belum di-lihat
+    // 2. Segment scan
     for await (const { data } of this.segments.scanAll(decrypt)) {
       try {
-        const parseable = data;
-        const doc = JSON.parse(parseable.toString('utf8')) as { _id?: string };
+        const doc = JSON.parse(data.toString('utf8')) as { _id?: string };
         const id  = doc._id;
         if (!id || seen.has(id)) continue;
         seen.add(id);
@@ -284,14 +274,13 @@ export class StorageEngine {
   }
 
   async *scanRange(gte?: string, lte?: string): AsyncIterableIterator<[string, Buffer]> {
-    const seen = new Set<string>();
+    const seen    = new Set<string>();
     const decrypt = this.decryptFn;
     for (const [id, pending] of this.writeBuffer) {
       if (gte && id < gte) continue;
       if (lte && id > lte) continue;
       seen.add(id);
       if (pending.op !== WalOp.DELETE) {
-        // fix: decrypt writeBuffer data in scanRange too
         const buf = decrypt ? decrypt(pending.data) : pending.data;
         yield [id, buf];
       }
@@ -306,48 +295,27 @@ export class StorageEngine {
 
   async flush(): Promise<void> { return this._doFlush(true); }
 
-  /**
-   * feat: forceCompact — trigger compaction manual, tidak menunggu auto-compaction.
-   * Berguna setelah deleteMany besar untuk segera reclaim space.
-   */
   async forceCompact(): Promise<void> {
     if (this.writeBuffer.size > 0) await this._doFlush();
-    await new Promise<void>((resolve) => {
+    await new Promise<void>(resolve => {
       this._autoCompact();
-      // autoCompact adalah async background — flush lagi setelah selesai
-      setTimeout(async () => {
-        await this.pageManager.flushDirty();
-        resolve();
-      }, 100);
+      setTimeout(async () => { await this.pageManager.flushDirty(); resolve(); }, 100);
     });
     log.info('Force compact triggered', { col: this.colName });
   }
 
-  /**
-   * feat: backup — salin semua file collection ke destPath secara konsisten.
-   * Menggunakan flush + lock sementara agar backup tidak corrupt.
-   * @param destPath  Path direktori tujuan backup (akan dibuat jika belum ada)
-   */
   async backup(destPath: string): Promise<void> {
-    // 1. Flush semua pending writes agar segment files up-to-date
     if (this.writeBuffer.size > 0) await this._doFlush(true);
     await this.pageManager.flushDirty();
     await this.wal.checkpoint();
-
-    // 2. Buat dest dir
     await fsp.mkdir(destPath, { recursive: true });
-
-    // 3. Copy semua file collection ke dest
     const entries = await fsp.readdir(this.dirPath, { withFileTypes: true });
-    const copyJobs = entries
-      .filter(e => e.isFile())
-      .map(e => fsp.copyFile(
-        path.join(this.dirPath, e.name),
-        path.join(destPath, e.name),
-      ));
-    await Promise.all(copyJobs);
-
-    log.info(`Backup complete`, { col: this.colName, dest: destPath, files: copyJobs.length });
+    await Promise.all(
+      entries.filter(e => e.isFile()).map(e =>
+        fsp.copyFile(path.join(this.dirPath, e.name), path.join(destPath, e.name)),
+      ),
+    );
+    log.info(`Backup complete`, { col: this.colName, dest: destPath });
   }
 
   async stats(collection: string): Promise<OvnStats> {
@@ -375,17 +343,18 @@ export class StorageEngine {
   }
 
   private _bufferWrite(id: string, data: Buffer, op: WalOp, txId: bigint): void {
+    const existing = this.writeBuffer.get(id);
+    if (existing) this._bufferBytes -= existing.data.length;
+
     this.writeBuffer.set(id, { id, data, op, txId });
-    // update: untuk cache, simpan plaintext (setelah decrypt)
-    // Tapi di sini kita tidak punya decryptFn tersedia secara sinkron.
-    // Cache hanya digunakan untuk read path — writeBuffer read path sudah handle decrypt.
+    this._bufferBytes += data.length;
+
     if (op !== WalOp.DELETE) {
-      // Cache plaintext jika kita bisa decrypt, otherwise skip (read dari buffer)
-      if (this.decryptFn) {
-        try { this.cache.set(id, this.decryptFn(data)); } catch { /* skip */ }
-      } else {
-        this.cache.set(id, data);
-      }
+      // Cache plaintext untuk read performance
+      try {
+        const plain = this.decryptFn ? this.decryptFn(data) : data;
+        this.cache.set(id, plain);
+      } catch { /* decrypt bisa gagal di edge case */ }
     } else {
       this.cache.delete(id);
     }
@@ -402,22 +371,17 @@ export class StorageEngine {
     if (this.writeBuffer.size === 0) return;
     const entries = [...this.writeBuffer.entries()];
     this.writeBuffer.clear();
+    this._bufferBytes = 0;
 
     for (const [id, { data, op, txId }] of entries) {
       if (op === WalOp.DELETE) {
         const ptr = await this.tree.get(id);
-        if (ptr) {
-          this.segments.deleteRecord(ptr);
-          await this.tree.delete(id);
-        }
+        if (ptr) { this.segments.deleteRecord(ptr); await this.tree.delete(id); }
       } else {
         if (op === WalOp.UPDATE) {
           const oldPtr = await this.tree.get(id);
           if (oldPtr) this.segments.deleteRecord(oldPtr);
         }
-        // Note: data di buffer adalah ciphertext (jika encrypted) atau plaintext.
-        // Segment menyimpan data apa adanya — ConsistencyPrinciple:
-        // "engine tidak tahu/peduli enkripsi, CollectionV2 yang mengurus"
         const ptr = this.segments.writeRecord(data, txId);
         await this.tree.set(id, ptr);
       }
@@ -434,19 +398,36 @@ export class StorageEngine {
   private async _readFromSegment(id: string, ptr: RecordPointer): Promise<Buffer | null> {
     const raw = this.segments.readRecord(ptr);
     if (!raw) return null;
+    // segments.readRecord sudah decompressed, tinggal decrypt
     const payload = this.decryptFn ? this.decryptFn(raw) : raw;
     this.cache.set(id, payload);
     return payload;
   }
 
+  /**
+   * G3: autoCompact callback menerima _id sekarang.
+   * Constraint baru: SegmentManager.autoCompact menerima callback dengan signature baru
+   * yang juga memberikan _id sehingga B+ Tree update jadi O(1) per record.
+   * Karena SegmentManager lama tidak pass _id, kita scan data untuk extract _id.
+   */
   private _autoCompact(): void {
-    // update: gunakan build ulang tree untuk update pointer yang lebih akurat
     this.segments.autoCompact(async (oldPtr, newPtr) => {
-      // update: optimasi — scan hanya leaf nodes dari B+ Tree
-      for await (const [id, ptr] of this.tree.entries()) {
-        if (ptr.segmentId === oldPtr.segmentId && ptr.offset === oldPtr.offset) {
-          await this.tree.set(id, newPtr);
-          break;
+      // G3: baca data dari newPtr (sudah compacted) untuk extract _id
+      // Ini tetap O(k) tapi bukan O(n²) — setiap compaction event hanya
+      // trigger satu B+ Tree set() bukan full scan
+      const raw = this.segments.readRecord(newPtr);
+      if (!raw) return;
+      try {
+        const plain = this.decryptFn ? this.decryptFn(raw) : raw;
+        const doc = JSON.parse(plain.toString('utf8')) as { _id?: string };
+        if (doc._id) await this.tree.set(doc._id, newPtr);
+      } catch {
+        // Fallback: scan tree untuk temukan key yang cocok (rare case)
+        for await (const [id, ptr] of this.tree.entries()) {
+          if (ptr.segmentId === oldPtr.segmentId && ptr.offset === oldPtr.offset) {
+            await this.tree.set(id, newPtr);
+            break;
+          }
         }
       }
     }).catch(err => log.error('auto-compact error', { err: String(err) }));

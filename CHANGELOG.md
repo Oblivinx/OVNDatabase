@@ -1,87 +1,125 @@
 # OvnDB Changelog
 
-## [0.0.2] — Big Update
+## [3.0.0] — Full Production Release
 
-### Fixed
+### 🔴 Critical Bug Fixes
 
-- **BUG KRITIS** `StorageEngine.scan()` tidak mendekripsi data di `writeBuffer` sebelum di-yield.
-  Sebelumnya `find({})` melewati writeBuffer tanpa `decryptFn`, menyebabkan JSON parse error
-  dan dokumen fresh (belum di-flush) tidak muncul. Sekarang `scan()` selalu apply `decryptFn`
-  ke data dari writeBuffer juga, konsisten dengan segment scan.
+#### G1 — LRU Cache berbasis bytes (bukan jumlah entry)
+**File:** `src/core/cache/lru-cache.ts`
+Sebelumnya `DOC_CACHE_SIZE = 100_000` bisa menyebabkan OOM jika tiap dokumen besar.
+Sekarang `LRUCache` menggunakan batas byte (`MAX_CACHE_BYTES = 256 MB`). Eviction otomatis
+saat bytes melebihi limit — tidak ada lagi OOM dari cache.
 
-- **BUG KRITIS** `CollectionV2._withEncryption()` menggunakan monkey-patching pada
-  `engine.insert/update/upsert`. Pendekatan ini rentan race condition bila ada dua operasi
-  concurrent (misalnya via `Promise.all`). Diganti dengan override bersih pada
-  `_serialize()` dan `_parse()` di `Collection`.
+#### G2 — `deleteAll()` O(1) bukan O(n)
+**File:** `src/core/storage/storage-engine.ts`
+Sebelumnya loop serial per-record via B+ Tree. Sekarang:
+- `tree.clear()` → reset tree ke root kosong (O(1) via `PageManager.reset()`)
+- `segments.markAllDeleted()` → satu pass per segment, bukan per-record B+ Tree lookup
 
-- `StorageEngine.read()` tidak mendekripsi data dari `writeBuffer`. Sekarang fixed — apapun
-  yang keluar dari `read()` selalu plaintext.
+#### G3 — `autoCompact` pointer update O(1) bukan O(n²)
+**File:** `src/core/storage/storage-engine.ts`
+Sebelumnya setiap pointer update membutuhkan full tree scan O(n).
+Sekarang callback menerima data record sehingga `_id` bisa di-extract langsung → O(1) per record.
 
-- `StorageEngine._bufferWrite()` sekarang cache plaintext (hasil decrypt) di LRU, bukan
-  ciphertext. Cache hit rate naik signifikan pada encrypted collections.
+#### G4 — WriteBuffer byte limit (64 MB)
+**File:** `src/core/storage/storage-engine.ts`
+Flush sekarang dipicu oleh count ATAU bytes threshold — mencegah 2000 dokumen 1MB memenuhi 2GB RAM.
 
-- `StorageEngine.scanRange()` juga fix — writeBuffer di-decrypt sebelum di-yield.
+#### G5 — WAL rotation (max 256 MB)
+**File:** `src/core/wal/wal.ts`
+WAL di-rotate ke `.wal.bak` saat melampaui `WAL_MAX_SIZE_BYTES`. Mencegah WAL tumbuh tak terbatas
+saat crash sebelum checkpoint.
 
-- `Collection.aggregate()` sekarang menggunakan `engine.scan()` yang sudah ada `decryptFn`,
-  sehingga aggregate pada encrypted collection berfungsi benar.
+#### G6 — WAL replay tidak lagi apply operasi dari TX_ABORT
+**File:** `src/core/wal/wal.ts`
+Bug kritis: operasi dari transaksi yang di-abort di-replay saat crash recovery → data corruption.
+Sekarang `_replay()` melacak semua `TX_ABORT` txId dan memfilter operasinya.
 
-- `Transaction` sekarang wrap error tiap op dengan context `op[N] (kind)` yang lebih informatif.
+#### G13 — Key versioning (1 byte header)
+**File:** `src/crypto/crypto-layer.ts`
+Format ciphertext v3: `[1 keyVersion][12 IV][16 Tag][N CT]` (29 bytes overhead).
+Memungkinkan key rotation bertahap tanpa harus downtime seluruh collection.
 
-### Added
+#### G17 — Manifest checksum SHA-256
+**File:** `src/core/storage/segment-manager.ts`
+Manifest `.json` sekarang disertai checksum SHA-256. Jika manifest corrupt saat open(),
+error dilempar sebelum data dibaca → tidak ada silent data corruption.
 
-#### `Collection`
-- `findById(id)` — shortcut `findOne({ _id })` tanpa object allocation
-- `findManyById(ids[])` — batch read multiple IDs, deduplicates, paralel, skip missing
-- `exists(filter)` — cek eksistensi tanpa load full document
-- `bulkWrite(ops[], { ordered })` — batch operasi mixed (insert/update/delete/upsert/replace)
-  dalam satu call. Support `ordered` (default true) dan `unordered` mode
-- `truncate()` — hapus semua dokumen lebih efisien dari `deleteMany({})`
-- `findOneAndReplace(filter, replacement)` — atomic find + replace + return new doc
-- `compact()` — trigger manual compaction untuk collection ini
-- `aggregate(pipeline, lookupResolver?)` — sekarang support custom `lookupResolver` untuk
-  cross-collection `$lookup`
-- `_serialize(doc)` — override hook untuk subclass (dipakai CollectionV2)
+### 🟡 Medium Fixes & Improvements
 
-#### `Transaction`
-- `upsert(col, filter, spec)` — upsert dalam transaction dengan rollback support
-- `replace(col, filter, replacement)` — replace dalam transaction dengan rollback support
+#### G7 — `PagedBPlusTree.clear()` method
+O(1) tree reset via `PageManager.reset()`. Dipakai oleh `deleteAll()`.
 
-#### `UpdateSpec`
-- `$setOnInsert` — hanya di-apply saat dokumen baru dibuat (upsert insert path)
+#### G8 — `entries()` dengan limit + cursor pagination
+`tree.entries(opts?)` support `gte`, `limit`, `after` untuk efisien cursor pagination.
 
-#### `StorageEngine`
-- `deleteAll()` — hapus semua record (untuk `truncate()`) tanpa per-record overhead
-- `forceCompact()` — trigger manual compaction
-- `backup(destPath)` — salin semua file collection ke destPath secara konsisten (flush dulu)
+#### G9 — Dirty-aware page eviction
+`PageManager` kini memilih clean pages untuk di-evict terlebih dahulu. Dirty pages hanya
+di-evict jika tidak ada clean page — mencegah latency spike dari forced synchronous write.
 
-#### `OvnDB`
-- `backup(destPath)` — full database backup (semua collection terbuka)
-- `status()` — laporan kesehatan DB: `CollectionStatus[]`, `totalSize`, `isHealthy`
-- `collectionExists(name)` — cek apakah collection sudah ada di disk
-- `gracefulShutdown` option — auto-close pada SIGTERM/SIGINT/beforeExit
+#### G14 — `CollectionV2.rotateEncryptionKey(newCrypto)`
+Rotate key semua record dalam collection tanpa downtime. Update `decryptFn` engine setelah selesai.
 
-#### `CryptoLayer`
-- `verify(ciphertext)` — cek integritas buffer tanpa throw
-- `reencrypt(ciphertext, newCrypto)` — re-encrypt dengan key baru (key rotation)
-- `rotateKey(ciphertexts[], newCrypto)` — mass key rotation
-- `CryptoLayer.isEncryptedBuffer(buf)` — heuristik cek apakah buffer adalah ciphertext
+#### G15 — Compression via `compressFn/decompressFn` hooks
+`FileFlags.COMPRESSED` kini diimplementasi. Inject compression di `OvnDB.open()` atau langsung
+ke `StorageEngine`. Kompatibel dengan `zlib.gzipSync`, `lz4`, `zstd`, dll.
 
-#### `LRUCache`
-- `clear()` — kosongkan semua entry (dipakai oleh `deleteAll()`)
+#### G16 — `scanAll()` partial scan (fromSegment, fromOffset)
+`SegmentManager.scanAll()` sekarang bisa mulai dari segment dan offset tertentu — efisien untuk
+large cursor-based pagination.
 
-#### `SecondaryIndexManager`
-- `clearAll()` — kosongkan semua index data (dipakai oleh `truncate()`)
+### ✨ New Features
 
-#### Types
-- `BulkWriteOp<T>` — discriminated union untuk semua op type di `bulkWrite()`
-- `BulkWriteResult` — hasil detail `bulkWrite()` (counts, insertedIds, errors)
-- `DBStatus` — struktur hasil `db.status()`
-- `CollectionStatus` — status per-collection dalam `DBStatus`
-- `CursorOptions<T>` — untuk implementasi cursor pagination di masa depan
+#### G10 — Query operators: `$type`, `$where`, `$mod`, `$not`
+**File:** `src/core/query/filter.ts`
+- `$type: 'string'|'number'|'boolean'|'array'|'object'|'null'` — cek tipe nilai
+- `$where: (val) => boolean` — predikat kustom
+- `$mod: [divisor, remainder]` — modulo check
+- `$not: { $gt: 5 }` — negasi operator
+
+#### G11 — Aggregation: `$bucket`, `$facet`, `$densify`, `$setWindowFields`
+**File:** `src/core/query/aggregation.ts`
+- `$bucket` — distribusikan docs ke range buckets (histogram)
+- `$facet` — jalankan multiple sub-pipeline paralel, return satu output dokumen
+- `$densify` — isi gap dalam sequence numerik (time-series)
+- `$setWindowFields` — window functions: `$rank`, `$denseRank`, `$sum`, `$avg` dengan window frames
+
+#### G12 — `FieldCrypto` — enkripsi per-field
+**File:** `src/crypto/crypto-layer.ts`
+```ts
+const fc = new FieldCrypto(cryptoLayer);
+const doc = fc.encryptFields({ name, phone, ssn }, ['phone', 'ssn']);
+const plain = fc.decryptFields(doc);
+```
+Field yang terenkripsi disimpan sebagai base64. Tidak terenkripsi tetap bisa di-query secara normal.
+
+#### G18 — `MigrationRunner` — schema evolution
+**File:** `src/migration/migration-runner.ts`
+```ts
+const runner = new MigrationRunner(collection);
+await runner.migrate(2, (doc) => ({ ...doc, fullName: `${doc.first} ${doc.last}` }), {
+  batchSize: 500, dryRun: false, continueOnError: true,
+  onProgress: (p) => console.log(`${p.migrated}/${p.total}`),
+});
+```
+- Cursor-based iteration (aman untuk collection besar)
+- `dryRun` mode untuk preview
+- `countPending()` dan `isComplete()`
+
+#### G19 — `findWithStats()` — execution statistics
+**File:** `src/collection/collection.ts`
+```ts
+const { docs, stats } = await col.findWithStats({ role: 'admin' });
+// stats.planType, stats.indexUsed, stats.totalDocsScanned,
+// stats.totalKeysScanned, stats.nReturned, stats.executionTimeMs
+```
 
 ### Changed
 
-- `CollectionV2` tidak lagi menggunakan monkey-patching. Semua write ops kini
-  menggunakan `_serialize()` override, semua read ops menggunakan `_parse()` override.
-  Behavior dari luar tidak berubah.
-- `upsertOne()` sekarang support `$setOnInsert` (backward compatible — jika tidak ada `$setOnInsert`, behavior sama seperti sebelumnya).
+- `OvnDB.open()` sekarang menerima `cacheBytes` (byte limit) alih-alih `cacheSize` (count).
+  `cacheSize` masih diterima sebagai alias untuk backward compat.
+- `OvnDB.open()` menerima `compressFn` dan `decompressFn` untuk compression global.
+- `LRUCache` constructor sekarang `maxBytes` bukan `capacity`. Angka kecil (≤ 10000)
+  dianggap jumlah entry × 4096 bytes untuk backward compat.
+- Manifest format `v3`: tambah field `checksum` SHA-256. Manifest v2 tetap dibaca tanpa error
+  (checksum di-skip jika tidak ada).

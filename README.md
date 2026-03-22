@@ -1,4 +1,4 @@
-# OvnDB v0.0.2
+# OvnDB v2.0
 
 **High-performance embedded NoSQL database for Node.js — scales to trillions of records.**
 
@@ -6,9 +6,9 @@ Zero external dependencies. Pure TypeScript. MongoDB-compatible API.
 
 ---
 
-## What's new in v0.0.2
+## What's new in v2.0
 
-| Feature | v0.0.1 | v0.0.2 |
+| Feature | v1 | v2 |
 |---|---|---|
 | **Index storage** | In-memory B+ Tree (RAM = index size) | **On-disk Paged B+ Tree** (256 MB buffer pool serves 1T+ records) |
 | **Data files** | Single `.ovn` file per collection | **Multi-segment** (512 MB each, parallel compaction) |

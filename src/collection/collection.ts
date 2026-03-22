@@ -1,15 +1,17 @@
 // ============================================================
-//  OvnDB v2.1 — Collection
+//  OvnDB v3.0 — Collection
 //
-//  update: added truncate(), exists(), findById(), findManyById(),
-//          bulkWrite(), compact(), improved upsertOne ($setOnInsert),
-//          fixed aggregate() scan path, _serialize() override hook,
-//          better error context, ordered/unordered bulkWrite
+//  G19 FIX: findWithStats() — eksekusi query + kembalikan ExecutionStats.
+//  Update: semua existing v2.1 features dipertahankan.
+//
+//  v3.1 FIXES:
+//  - insertOne/updateOne/deleteOne: storage dulu, index kemudian (fix consistency bug)
+//  - updateMany/deleteMany: streaming — tidak load semua docs ke RAM (fix OOM risk)
 // ============================================================
 
 import { generateId }       from '../utils/id-generator.js';
 import { matchFilter, applyUpdate, applyProjection } from '../core/query/filter.js';
-import { QueryPlanner }     from '../core/query/planner.js';
+import { QueryPlanner, type ExecutionStats }  from '../core/query/planner.js';
 import { compilePipeline }  from '../core/query/aggregation.js';
 import { ChangeStreamRegistry } from './change-stream.js';
 import { SecondaryIndexManager } from '../core/index/secondary-index.js';
@@ -44,36 +46,38 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     this.indexes.set(def.field, def);
     this.idxMgr.addIndex(def);
     await this.idxMgr.open();
-    // rebuild index dari data yang sudah ada
-    // update: scan dengan decryptFn agar encrypted collections work
     const allDocs: Record<string, unknown>[] = [];
     for await (const [, buf] of this.engine.scan()) {
-      try { allDocs.push(this._parse(buf) as Record<string, unknown> ?? {}); } catch { /* skip */ }
+      const doc = this._parse(buf);
+      if (doc) allDocs.push(doc as Record<string, unknown>);
     }
     if (allDocs.length > 0) this.idxMgr.rebuildFromDocs(allDocs);
     await this.idxMgr.save();
   }
 
-  async dropIndex(field: string): Promise<void> {
-    this.indexes.delete(field);
-  }
+  async dropIndex(field: string): Promise<void> { this.indexes.delete(field); }
 
   // ── Insert ────────────────────────────────────────────────
 
   async insertOne(doc: Omit<T, '_id'> & { _id?: string }): Promise<T> {
     const full = { ...doc, _id: doc._id ?? generateId() } as T;
     const buf  = this._serialize(full);
-    this.idxMgr.onInsert(full as unknown as Record<string, unknown>);
+    // FIX: storage DULU — jika insert gagal (misal duplicate _id), index tidak tersentuh
     await this.engine.insert(full._id, buf);
+    // Index KEMUDIAN — jika gagal, rollback storage insert agar tetap konsisten
+    try {
+      this.idxMgr.onInsert(full as unknown as Record<string, unknown>);
+    } catch (idxErr) {
+      try { await this.engine.delete(full._id); } catch { /* best-effort rollback */ }
+      throw idxErr;
+    }
     this._emitChange({ operationType: 'insert', documentKey: { _id: full._id }, fullDocument: full, timestamp: Date.now(), txId: 0n });
     return full;
   }
 
   async insertMany(docs: Array<Omit<T, '_id'> & { _id?: string }>): Promise<T[]> {
     const results: T[] = [];
-    for (const doc of docs) {
-      results.push(await this.insertOne(doc));
-    }
+    for (const doc of docs) results.push(await this.insertOne(doc));
     await this.flush();
     return results;
   }
@@ -93,14 +97,12 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     return null;
   }
 
-  /** feat: shortcut for findOne by _id */
   async findById(id: string): Promise<T | null> {
     const buf = await this.engine.read(id);
     if (!buf) return null;
     return this._parse(buf);
   }
 
-  /** feat: batch read multiple _ids in one call — deduplicates & skips missing */
   async findManyById(ids: string[]): Promise<T[]> {
     const unique = [...new Set(ids)];
     const results: T[] = [];
@@ -112,10 +114,7 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   }
 
   async find(filter: QueryFilter = {}, options: QueryOptions = {}): Promise<T[]> {
-    if (options.explain) {
-      const plan = this.explain(filter, options);
-      return [plan as unknown as T];
-    }
+    if (options.explain) return [this.explain(filter, options) as unknown as T];
 
     const docs: T[] = [];
     for await (const doc of this._scanWithPlan(filter, options)) {
@@ -134,8 +133,50 @@ export class Collection<T extends OvnDocument = OvnDocument> {
         return 0;
       });
     }
-
     return docs;
+  }
+
+  /**
+   * G19: find() + ExecutionStats — eksekusi query dan kembalikan stats lengkap.
+   * Berguna untuk debugging query performance.
+   *
+   * @example
+   *   const { docs, stats } = await users.findWithStats({ role: 'admin' });
+   *   console.log(`Scanned: ${stats.totalDocsScanned}, Returned: ${stats.nReturned}, ${stats.executionTimeMs}ms`);
+   */
+  async findWithStats(
+    filter: QueryFilter = {},
+    options: QueryOptions = {},
+  ): Promise<{ docs: T[]; stats: ExecutionStats }> {
+    const stats   = this.planner.createStatsTracker();
+    const plan    = this.planner.plan(filter, options);
+    const t0      = performance.now();
+
+    stats.planType  = plan.planType;
+    stats.indexUsed = plan.indexField ?? null;
+
+    const docs: T[] = [];
+    for await (const doc of this._scanWithPlan(filter, options, stats)) {
+      docs.push(applyProjection(doc, options.projection) as T);
+    }
+
+    if (options.sort) {
+      const entries = Object.entries(options.sort);
+      docs.sort((a, b) => {
+        for (const [field, dir] of entries) {
+          const av = (a as Record<string, unknown>)[field];
+          const bv = (b as Record<string, unknown>)[field];
+          const cmp = av === bv ? 0 : av! < bv! ? -1 : 1;
+          if (cmp !== 0) return cmp * dir;
+        }
+        return 0;
+      });
+    }
+
+    stats.nReturned      = docs.length;
+    stats.nRejected      = stats.totalDocsScanned - docs.length;
+    stats.executionTimeMs = Math.round((performance.now() - t0) * 100) / 100;
+    return { docs, stats };
   }
 
   async countDocuments(filter: QueryFilter = {}): Promise<number> {
@@ -146,15 +187,13 @@ export class Collection<T extends OvnDocument = OvnDocument> {
 
   async distinct(field: string, filter: QueryFilter = {}): Promise<unknown[]> {
     const values = new Set<string>();
-    const docs   = await this.find(filter);
-    for (const doc of docs) {
+    for (const doc of await this.find(filter)) {
       const val = (doc as Record<string, unknown>)[field];
       if (val !== undefined) values.add(JSON.stringify(val));
     }
     return [...values].map(v => JSON.parse(v));
   }
 
-  /** feat: quick existence check without loading full document */
   async exists(filter: QueryFilter): Promise<boolean> {
     for await (const _ of this._scanWithPlan(filter, { limit: 1 })) return true;
     return false;
@@ -169,12 +208,11 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     const updated = applyUpdate(doc as unknown as Record<string, unknown>, spec);
     updated['_id'] = doc._id;
     const buf = this._serialize(updated as T);
-    this.idxMgr.onUpdate(before as unknown as Record<string, unknown>, updated);
+    // FIX: storage DULU — jika update gagal, index tidak tersentuh
     await this.engine.update(doc._id, buf);
+    this.idxMgr.onUpdate(before as unknown as Record<string, unknown>, updated);
     this._emitChange({
-      operationType: 'update',
-      documentKey:   { _id: doc._id },
-      fullDocument:  updated as T,
+      operationType: 'update', documentKey: { _id: doc._id }, fullDocument: updated as T,
       updateDescription: { updatedFields: spec.$set ?? {}, removedFields: Object.keys(spec.$unset ?? {}) },
       timestamp: Date.now(), txId: 0n,
     });
@@ -182,30 +220,24 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   }
 
   async updateMany(filter: QueryFilter, spec: UpdateSpec): Promise<number> {
-    const docs = await this.find(filter);
-    let count  = 0;
-    for (const doc of docs) {
-      if (await this.updateOne({ _id: doc._id }, spec)) count++;
-    }
+    // FIX: streaming scan — tidak load semua matching docs ke RAM
+    // Kumpulkan _id dulu (lightweight), baru update satu per satu
+    const ids: string[] = [];
+    for await (const doc of this._scanWithPlan(filter)) ids.push(doc._id);
+    let count = 0;
+    for (const id of ids) { if (await this.updateOne({ _id: id }, spec)) count++; }
     return count;
   }
 
-  /**
-   * Upsert: insert jika tidak ada, update jika ada.
-   * update: mendukung $setOnInsert — hanya di-apply saat dokumen baru dibuat
-   */
   async upsertOne(filter: QueryFilter, spec: UpdateSpec): Promise<T> {
     const existing = await this.findOne(filter);
     if (!existing) {
-      // fix: gabungkan $set dan $setOnInsert saat insert
       const insertFields = {
-        ...(spec.$set ?? {}),
-        ...(spec.$setOnInsert ?? {}),
+        ...(spec.$set ?? {}), ...(spec.$setOnInsert ?? {}),
         _id: (filter['_id'] as string) ?? generateId(),
       };
       return this.insertOne(insertFields as Omit<T, '_id'> & { _id?: string });
     }
-    // update: strip $setOnInsert saat update (tidak dipakai)
     const updateSpec: UpdateSpec = { ...spec };
     delete updateSpec.$setOnInsert;
     await this.updateOne({ _id: existing._id }, updateSpec);
@@ -227,25 +259,22 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   async deleteOne(filter: QueryFilter): Promise<boolean> {
     const doc = await this.findOne(filter);
     if (!doc) return false;
-    this.idxMgr.onDelete(doc as unknown as Record<string, unknown>);
+    // FIX: storage DULU — jika delete gagal, index tidak tersentuh
     await this.engine.delete(doc._id);
+    this.idxMgr.onDelete(doc as unknown as Record<string, unknown>);
     this._emitChange({ operationType: 'delete', documentKey: { _id: doc._id }, timestamp: Date.now(), txId: 0n });
     return true;
   }
 
   async deleteMany(filter: QueryFilter = {}): Promise<number> {
-    const docs = await this.find(filter);
-    let count  = 0;
-    for (const doc of docs) {
-      if (await this.deleteOne({ _id: doc._id })) count++;
-    }
+    // FIX: kumpulkan _id dulu via streaming, baru delete — hindari load semua doc ke RAM
+    const ids: string[] = [];
+    for await (const doc of this._scanWithPlan(filter)) ids.push(doc._id);
+    let count = 0;
+    for (const id of ids) { if (await this.deleteOne({ _id: id })) count++; }
     return count;
   }
 
-  /**
-   * feat: hapus SEMUA dokumen dalam collection (jauh lebih efisien dari deleteMany({}))
-   * Menggunakan engine.deleteAll() untuk skip per-doc index overhead.
-   */
   async truncate(): Promise<void> {
     await this.engine.deleteAll();
     this.idxMgr.clearAll();
@@ -267,9 +296,6 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     return doc;
   }
 
-  /**
-   * feat: findOneAndReplace — atomic find, replace, return new doc
-   */
   async findOneAndReplace(filter: QueryFilter, replacement: Omit<T, '_id'>): Promise<T | null> {
     const doc = await this.findOne(filter);
     if (!doc) return null;
@@ -280,64 +306,35 @@ export class Collection<T extends OvnDocument = OvnDocument> {
 
   // ── BulkWrite ─────────────────────────────────────────────
 
-  /**
-   * feat: bulkWrite — batch operasi mixed dalam satu call.
-   * Mendukung insertOne, updateOne, updateMany, deleteOne, deleteMany, upsertOne, replaceOne.
-   *
-   * @param ops     Array operasi yang akan dieksekusi
-   * @param ordered Jika true (default), hentikan saat ada error.
-   *                Jika false, lanjutkan dan kumpulkan errors.
-   *
-   * @example
-   *   await col.bulkWrite([
-   *     { op: 'insertOne', doc: { name: 'Budi' } },
-   *     { op: 'updateOne', filter: { status: 'draft' }, spec: { $set: { status: 'active' } } },
-   *     { op: 'deleteMany', filter: { expired: true } },
-   *   ]);
-   */
-  async bulkWrite(
-    ops: BulkWriteOp<T>[],
-    options: { ordered?: boolean } = {},
-  ): Promise<BulkWriteResult> {
-    const ordered = options.ordered !== false; // default true
+  async bulkWrite(ops: BulkWriteOp<T>[], options: { ordered?: boolean } = {}): Promise<BulkWriteResult> {
+    const ordered = options.ordered !== false;
     const result: BulkWriteResult = {
-      ops: ops.length,
-      insertedCount: 0,
-      updatedCount:  0,
-      deletedCount:  0,
-      upsertedCount: 0,
-      replacedCount: 0,
-      insertedIds:   [],
-      errors:        [],
+      ops: ops.length, insertedCount: 0, updatedCount: 0,
+      deletedCount: 0, upsertedCount: 0, replacedCount: 0,
+      insertedIds: [], errors: [],
     };
 
     for (let i = 0; i < ops.length; i++) {
       const op = ops[i]!;
       try {
         if (op.op === 'insertOne') {
-          const inserted = await this.insertOne(op.doc);
-          result.insertedIds.push(inserted._id);
-          result.insertedCount++;
+          const ins = await this.insertOne(op.doc);
+          result.insertedIds.push(ins._id); result.insertedCount++;
         } else if (op.op === 'updateOne') {
-          const ok = await this.updateOne(op.filter, op.spec);
-          if (ok) result.updatedCount++;
+          if (await this.updateOne(op.filter, op.spec)) result.updatedCount++;
         } else if (op.op === 'updateMany') {
-          const n = await this.updateMany(op.filter, op.spec);
-          result.updatedCount += n;
+          result.updatedCount += await this.updateMany(op.filter, op.spec);
         } else if (op.op === 'deleteOne') {
-          const ok = await this.deleteOne(op.filter);
-          if (ok) result.deletedCount++;
+          if (await this.deleteOne(op.filter)) result.deletedCount++;
         } else if (op.op === 'deleteMany') {
-          const n = await this.deleteMany(op.filter);
-          result.deletedCount += n;
+          result.deletedCount += await this.deleteMany(op.filter);
         } else if (op.op === 'upsertOne') {
           const before = await this.exists(op.filter);
           await this.upsertOne(op.filter, op.spec);
           if (!before) { result.upsertedCount++; result.insertedCount++; }
           else result.updatedCount++;
         } else if (op.op === 'replaceOne') {
-          const ok = await this.replaceOne(op.filter, op.replacement as T);
-          if (ok) result.replacedCount++;
+          if (await this.replaceOne(op.filter, op.replacement as T)) result.replacedCount++;
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -345,32 +342,23 @@ export class Collection<T extends OvnDocument = OvnDocument> {
         if (ordered) throw new Error(`[OvnDB] bulkWrite aborted at op[${i}] (${op.op}): ${errMsg}`);
       }
     }
-
     await this.flush();
     return result;
   }
 
   // ── Aggregation ───────────────────────────────────────────
 
-  /**
-   * update: aggregate sekarang menggunakan _scanWithPlan agar enkripsi
-   * dan semua overrides berfungsi. lookupResolver bisa di-inject untuk
-   * cross-collection $lookup.
-   */
   async aggregate(
     pipeline: AggregationStage[],
     lookupResolver?: (colName: string) => Promise<Record<string, unknown>[]>,
   ): Promise<Record<string, unknown>[]> {
-    // fix: gunakan engine.scan() yang sudah ada decryptFn-nya
     const allDocs: Record<string, unknown>[] = [];
     for await (const [, buf] of this.engine.scan()) {
       const doc = this._parse(buf);
       if (doc) allDocs.push(doc as Record<string, unknown>);
     }
-
     const resolver = lookupResolver ?? (async (_: string) => []);
-    const exec = compilePipeline(pipeline, resolver);
-    return exec(allDocs);
+    return compilePipeline(pipeline, resolver)(allDocs);
   }
 
   // ── Explain ───────────────────────────────────────────────
@@ -387,35 +375,35 @@ export class Collection<T extends OvnDocument = OvnDocument> {
 
   // ── Maintenance ───────────────────────────────────────────
 
-  /** feat: trigger manual compaction untuk collection ini */
-  async compact(): Promise<void> {
-    await this.engine.forceCompact();
-  }
-
-  // ── Utilities ─────────────────────────────────────────────
-
-  async flush(): Promise<void>       { await this.engine.flush(); }
-  async stats(): Promise<OvnStats>   { return this.engine.stats(this.name); }
-
-  beginBulkLoad(): void              { this.engine.beginBulkLoad(); }
-  async endBulkLoad(): Promise<void> { await this.engine.endBulkLoad(); }
+  async compact(): Promise<void>       { await this.engine.forceCompact(); }
+  async flush(): Promise<void>         { await this.engine.flush(); }
+  async stats(): Promise<OvnStats>     { return this.engine.stats(this.name); }
+  beginBulkLoad(): void                { this.engine.beginBulkLoad(); }
+  async endBulkLoad(): Promise<void>   { await this.engine.endBulkLoad(); }
 
   // ── Internal ──────────────────────────────────────────────
 
-  protected async *_scanWithPlan(filter: QueryFilter, options?: QueryOptions): AsyncGenerator<T> {
-    const plan = this.planner.plan(filter, options);
-
+  protected async *_scanWithPlan(
+    filter: QueryFilter,
+    options?: QueryOptions,
+    stats?: ExecutionStats,
+  ): AsyncGenerator<T> {
+    const plan    = this.planner.plan(filter, options);
     const afterId = options?.after;
     let   skip    = options?.skip ?? 0;
     let   limit   = options?.limit ?? Infinity;
     let   emitted = 0;
     let   skipped = 0;
 
+    if (stats) { stats.planType = plan.planType; stats.indexUsed = plan.indexField ?? null; }
+
     if (plan.planType === 'primaryKey' && filter['_id'] !== undefined) {
       const buf = await this.engine.read(filter['_id'] as string);
+      if (stats) { stats.totalDocsScanned++; stats.totalKeysScanned++; }
       if (buf) {
         const doc = this._parse(buf);
         if (doc && matchFilter(doc as unknown as Record<string, unknown>, filter)) {
+          if (stats) stats.nReturned++;
           yield doc;
         }
       }
@@ -423,17 +411,17 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     }
 
     if (plan.planType === 'indexScan' && plan.indexField) {
-      const condition = filter[plan.indexField!];
+      const condition = filter[plan.indexField];
       let ids: string[] | null = null;
 
       if (condition !== null && typeof condition !== 'object') {
-        ids = this.idxMgr.lookup(plan.indexField!, condition);
+        ids = this.idxMgr.lookup(plan.indexField, condition);
       } else if (condition !== null && typeof condition === 'object') {
         const ops = condition as Record<string, unknown>;
-        if ('$eq' in ops) ids = this.idxMgr.lookup(plan.indexField!, ops.$eq);
+        if ('$eq' in ops) ids = this.idxMgr.lookup(plan.indexField, ops.$eq);
         else if ('$gte' in ops || '$lte' in ops) {
           ids = this.idxMgr.lookupRange(
-            plan.indexField!,
+            plan.indexField,
             ops.$gte !== undefined ? String(ops.$gte) : undefined,
             ops.$lte !== undefined ? String(ops.$lte) : undefined,
           );
@@ -441,14 +429,17 @@ export class Collection<T extends OvnDocument = OvnDocument> {
       }
 
       if (ids !== null) {
+        if (stats) stats.totalKeysScanned += ids.length;
         for (const id of ids) {
           if (emitted >= limit) break;
           const buf = await this.engine.read(id);
+          if (stats) stats.totalDocsScanned++;
           if (!buf) continue;
           const doc = this._parse(buf);
           if (!doc || !matchFilter(doc as unknown as Record<string, unknown>, filter)) continue;
           if (afterId && id <= afterId) continue;
           if (skipped < skip) { skipped++; continue; }
+          if (stats) stats.nReturned++;
           yield doc;
           emitted++;
         }
@@ -456,31 +447,24 @@ export class Collection<T extends OvnDocument = OvnDocument> {
       }
     }
 
-    // Full collection scan (fallback)
+    // Full collection scan
     for await (const [id, buf] of this.engine.scan()) {
       if (emitted >= limit) break;
       if (afterId && id <= afterId) continue;
+      if (stats) stats.totalDocsScanned++;
       const doc = this._parse(buf);
       if (!doc || !matchFilter(doc as unknown as Record<string, unknown>, filter)) continue;
       if (skipped < skip) { skipped++; continue; }
+      if (stats) stats.nReturned++;
       yield doc;
       emitted++;
     }
   }
 
-  /**
-   * update: _parse adalah override point untuk CollectionV2 (dekripsi).
-   * Selalu gunakan _parse, bukan JSON.parse langsung.
-   */
   protected _parse(buf: Buffer): T | null {
-    try { return JSON.parse(buf.toString('utf8')) as T; }
-    catch { return null; }
+    try { return JSON.parse(buf.toString('utf8')) as T; } catch { return null; }
   }
 
-  /**
-   * feat: _serialize adalah override point untuk CollectionV2 (enkripsi).
-   * Semua write ops menggunakan _serialize agar subclass bisa intercept.
-   */
   protected _serialize(doc: T): Buffer {
     return Buffer.from(JSON.stringify(doc), 'utf8');
   }

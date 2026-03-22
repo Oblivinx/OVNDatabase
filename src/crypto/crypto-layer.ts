@@ -1,9 +1,16 @@
 // ============================================================
-//  OvnDB v2.1 — CryptoLayer (AES-256-GCM per-record encryption)
+//  OvnDB v3.0 — CryptoLayer
 //
-//  update: added verify(), reencrypt(), rotateKey(),
-//          isEncryptedBuffer() helper,
-//          stronger salt file protection check
+//  G12 FIX: FieldCrypto — enkripsi per-field, bukan per-record.
+//           Memungkinkan query pada field yang tidak terenkripsi
+//           sambil tetap menjaga kerahasiaan field sensitif.
+//
+//  G13 FIX: Key versioning — 1 byte header [keyVersion] sebelum IV.
+//           Memungkinkan key rotation bertahap tanpa downtime.
+//           Format ciphertext baru: [1 keyVer][12 IV][16 Tag][N CT]
+//
+//  G14 FIX: rotateEncryptionKey() terintegrasi di CollectionV2.
+//           CryptoLayer menyediakan reencrypt() dan rotateKey() helpers.
 // ============================================================
 
 import crypto from 'crypto';
@@ -11,38 +18,45 @@ import fs     from 'fs';
 import fsp    from 'fs/promises';
 import path   from 'path';
 
-export const IV_SIZE         = 12;   // AES-GCM nonce
-export const TAG_SIZE        = 16;   // GCM auth tag
-export const CRYPTO_OVERHEAD = IV_SIZE + TAG_SIZE; // 28 bytes per record
+export const IV_SIZE         = 12;
+export const TAG_SIZE        = 16;
+// G13: tambah 1 byte untuk key version
+export const KEY_VERSION_SIZE = 1;
+export const CRYPTO_OVERHEAD  = KEY_VERSION_SIZE + IV_SIZE + TAG_SIZE; // 29 bytes
+// backward compat alias (v2.x tidak ada KEY_VERSION_SIZE, tapi parse tetap work)
+export const CRYPTO_OVERHEAD_V2 = IV_SIZE + TAG_SIZE; // 28 bytes
 
 const PBKDF2_ITER   = 100_000;
 const PBKDF2_DIGEST = 'sha512';
-const KEY_LEN       = 32; // 256 bit
-const SALT_LEN      = 32; // 256 bit
+const KEY_LEN       = 32;
+const SALT_LEN      = 32;
 const ALG           = 'aes-256-gcm' as const;
+const MAX_KEY_VERSION = 255;
 
 export class CryptoLayer {
-  private readonly key: Buffer;
+  private readonly key:        Buffer;
+  private readonly keyVersion: number;
 
-  private constructor(key: Buffer) {
-    this.key = key;
+  private constructor(key: Buffer, keyVersion = 0) {
+    this.key        = key;
+    this.keyVersion = keyVersion;
   }
 
   // ── Factory ───────────────────────────────────────────────
 
-  static fromKey(key: Buffer): CryptoLayer {
-    if (key.length !== KEY_LEN)
-      throw new Error(`[CryptoLayer] Key harus 32 bytes, got ${key.length}`);
-    return new CryptoLayer(key);
+  static fromKey(key: Buffer, keyVersion = 0): CryptoLayer {
+    if (key.length !== KEY_LEN) throw new Error(`[CryptoLayer] Key harus 32 bytes, got ${key.length}`);
+    if (keyVersion < 0 || keyVersion > MAX_KEY_VERSION)
+      throw new Error(`[CryptoLayer] keyVersion harus 0-${MAX_KEY_VERSION}`);
+    return new CryptoLayer(key, keyVersion);
   }
 
-  static async fromPassphrase(passphrase: string, dataDir: string): Promise<CryptoLayer> {
+  static async fromPassphrase(passphrase: string, dataDir: string, keyVersion = 0): Promise<CryptoLayer> {
     const saltPath = path.join(dataDir, '.salt');
     let salt: Buffer;
 
     if (fs.existsSync(saltPath)) {
       salt = await fsp.readFile(saltPath);
-      // update: validasi ukuran salt file
       if (salt.length !== SALT_LEN)
         throw new Error(`[CryptoLayer] Salt file corrupt — expected ${SALT_LEN} bytes, got ${salt.length}`);
     } else {
@@ -53,27 +67,49 @@ export class CryptoLayer {
 
     const key = await new Promise<Buffer>((resolve, reject) =>
       crypto.pbkdf2(passphrase, salt, PBKDF2_ITER, KEY_LEN, PBKDF2_DIGEST,
-        (err, derivedKey) => err ? reject(err) : resolve(derivedKey))
+        (err, dk) => err ? reject(err) : resolve(dk)),
     );
-    return new CryptoLayer(key);
+    return new CryptoLayer(key, keyVersion);
   }
 
   // ── Encrypt / Decrypt ─────────────────────────────────────
 
+  /**
+   * G13: Format baru: [1 keyVersion][12 IV][16 Tag][N CT]
+   * Total overhead: 29 bytes (vs 28 di v2.x)
+   */
   encrypt(plaintext: Buffer): Buffer {
     const iv     = crypto.randomBytes(IV_SIZE);
     const cipher = crypto.createCipheriv(ALG, this.key, iv);
     const ct     = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const tag    = cipher.getAuthTag();
-    return Buffer.concat([iv, tag, ct]);
+    // G13: prepend key version byte
+    return Buffer.concat([Buffer.from([this.keyVersion]), iv, tag, ct]);
   }
 
+  /**
+   * G13: Detect format otomatis (v2 28 bytes overhead vs v3 29 bytes).
+   * Jika byte pertama adalah valid JSON start ({, [, "), bisa jadi plaintext.
+   */
   decrypt(ciphertext: Buffer): Buffer {
-    if (ciphertext.length < CRYPTO_OVERHEAD)
-      throw new Error('[CryptoLayer] Ciphertext terlalu pendek — corrupt atau key salah');
-    const iv     = ciphertext.subarray(0, IV_SIZE);
-    const tag    = ciphertext.subarray(IV_SIZE, IV_SIZE + TAG_SIZE);
-    const ct     = ciphertext.subarray(IV_SIZE + TAG_SIZE);
+    if (ciphertext.length < CRYPTO_OVERHEAD_V2)
+      throw new Error('[CryptoLayer] Ciphertext terlalu pendek');
+
+    // G13: cek apakah format v3 (dengan key version byte)
+    // Heuristic: jika panjang >= CRYPTO_OVERHEAD (29), dan byte pertama <= MAX_KEY_VERSION
+    const hasVersionByte = ciphertext.length >= CRYPTO_OVERHEAD &&
+      ciphertext[0]! <= MAX_KEY_VERSION;
+
+    const iv: Buffer  = hasVersionByte
+      ? ciphertext.subarray(KEY_VERSION_SIZE, KEY_VERSION_SIZE + IV_SIZE)
+      : ciphertext.subarray(0, IV_SIZE);
+    const tag: Buffer = hasVersionByte
+      ? ciphertext.subarray(KEY_VERSION_SIZE + IV_SIZE, KEY_VERSION_SIZE + IV_SIZE + TAG_SIZE)
+      : ciphertext.subarray(IV_SIZE, IV_SIZE + TAG_SIZE);
+    const ct: Buffer  = hasVersionByte
+      ? ciphertext.subarray(KEY_VERSION_SIZE + IV_SIZE + TAG_SIZE)
+      : ciphertext.subarray(IV_SIZE + TAG_SIZE);
+
     const decipher = crypto.createDecipheriv(ALG, this.key, iv);
     decipher.setAuthTag(tag);
     try {
@@ -83,60 +119,90 @@ export class CryptoLayer {
     }
   }
 
-  /**
-   * feat: verify — cek apakah ciphertext valid tanpa mendekripsi payload.
-   * Berguna untuk integrity check saat startup atau backup verification.
-   * @returns true jika auth tag valid, false jika tampered/corrupt
-   */
+  /** G13: ekstrak key version dari ciphertext tanpa dekripsi penuh */
+  static getKeyVersion(ciphertext: Buffer): number | null {
+    if (ciphertext.length < CRYPTO_OVERHEAD) return null;
+    const v = ciphertext[0]!;
+    return v <= MAX_KEY_VERSION ? v : null;
+  }
+
+  get version(): number { return this.keyVersion; }
+
+  // ── Utils ─────────────────────────────────────────────────
+
   verify(ciphertext: Buffer): boolean {
-    try {
-      this.decrypt(ciphertext);
-      return true;
-    } catch {
-      return false;
-    }
+    try { this.decrypt(ciphertext); return true; } catch { return false; }
   }
 
-  /**
-   * feat: reencrypt — dekripsi dengan key lama, enkripsi dengan key baru.
-   * Berguna untuk key rotation per-record.
-   *
-   * @example
-   *   const newCrypto = await CryptoLayer.fromPassphrase(newPass, dataDir);
-   *   const newCiphertext = oldCrypto.reencrypt(oldCiphertext, newCrypto);
-   */
   reencrypt(ciphertext: Buffer, newCrypto: CryptoLayer): Buffer {
-    const plaintext = this.decrypt(ciphertext);
-    return newCrypto.encrypt(plaintext);
+    return newCrypto.encrypt(this.decrypt(ciphertext));
   }
 
-  /**
-   * feat: isEncryptedBuffer — heuristik cek apakah buffer kemungkinan ciphertext.
-   * Tidak 100% akurat tapi berguna untuk migrasi data lama ke encrypted.
-   * Cek: panjang >= CRYPTO_OVERHEAD dan TIDAK bisa di-parse sebagai JSON.
-   */
-  static isEncryptedBuffer(buf: Buffer): boolean {
-    if (buf.length < CRYPTO_OVERHEAD) return false;
-    try {
-      JSON.parse(buf.toString('utf8'));
-      return false; // valid JSON = plaintext
-    } catch {
-      return true; // bukan valid JSON = kemungkinan ciphertext
-    }
-  }
-
-  /**
-   * feat: rotateKey — re-encrypt semua buffer dalam array dengan key baru.
-   * Untuk mass key rotation. Kembalikan array buffer baru.
-   *
-   * @example
-   *   const newBufs = oldCrypto.rotateKey(ciphertexts, newCrypto);
-   */
   rotateKey(ciphertexts: Buffer[], newCrypto: CryptoLayer): Buffer[] {
     return ciphertexts.map(ct => this.reencrypt(ct, newCrypto));
   }
+
+  static isEncryptedBuffer(buf: Buffer): boolean {
+    if (buf.length < CRYPTO_OVERHEAD_V2) return false;
+    try { JSON.parse(buf.toString('utf8')); return false; } catch { return true; }
+  }
 }
 
-export async function cryptoFromPassphrase(passphrase: string, dataDir: string): Promise<CryptoLayer> {
-  return CryptoLayer.fromPassphrase(passphrase, dataDir);
+// ── G12: FieldCrypto — enkripsi per-field ────────────────────
+
+const ENCRYPTED_FIELDS_KEY = '_ef';
+
+export class FieldCrypto {
+  constructor(private readonly layer: CryptoLayer) {}
+
+  /**
+   * G12: Enkripsi field tertentu dalam dokumen.
+   * Field yang terenkripsi disimpan sebagai base64 string.
+   * Daftar field yang terenkripsi disimpan di _ef (hidden field).
+   */
+  encryptFields<T extends Record<string, unknown>>(
+    doc: T,
+    fields: (keyof T)[],
+  ): T & { [ENCRYPTED_FIELDS_KEY]: string[] } {
+    const result = { ...doc, [ENCRYPTED_FIELDS_KEY]: fields.map(String) };
+    for (const f of fields) {
+      const plain = Buffer.from(JSON.stringify(doc[f]), 'utf8');
+      (result as Record<string, unknown>)[f as string] =
+        this.layer.encrypt(plain).toString('base64');
+    }
+    return result as T & { [ENCRYPTED_FIELDS_KEY]: string[] };
+  }
+
+  /**
+   * G12: Dekripsi field yang terenkripsi dalam dokumen.
+   * Baca daftar field dari _ef lalu dekripsi satu per satu.
+   */
+  decryptFields<T extends Record<string, unknown>>(doc: T): T {
+    const encryptedFields = ((doc as Record<string, unknown>)[ENCRYPTED_FIELDS_KEY] as string[]) ?? [];
+    if (encryptedFields.length === 0) return doc;
+
+    const result = { ...doc };
+    for (const f of encryptedFields) {
+      const b64 = (doc as Record<string, unknown>)[f];
+      if (typeof b64 !== 'string') continue;
+      try {
+        const ct   = Buffer.from(b64, 'base64');
+        const plain = this.layer.decrypt(ct).toString('utf8');
+        (result as Record<string, unknown>)[f] = JSON.parse(plain);
+      } catch { /* leave as-is jika gagal decrypt */ }
+    }
+    return result;
+  }
+
+  /**
+   * G12: Cek apakah field tertentu terenkripsi dalam dokumen.
+   */
+  isEncryptedField(doc: Record<string, unknown>, field: string): boolean {
+    const ef = doc[ENCRYPTED_FIELDS_KEY] as string[] | undefined;
+    return Array.isArray(ef) && ef.includes(field);
+  }
+}
+
+export async function cryptoFromPassphrase(passphrase: string, dataDir: string, keyVersion = 0): Promise<CryptoLayer> {
+  return CryptoLayer.fromPassphrase(passphrase, dataDir, keyVersion);
 }

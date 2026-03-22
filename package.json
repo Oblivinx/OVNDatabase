@@ -1,6 +1,6 @@
 {
   "name": "ovndb",
-  "version": "0.0.2",
+  "version": "3.0.0",
   "description": "High-performance embedded NoSQL database for Node.js — on-disk B+ Tree, multi-segment storage, MVCC, aggregation pipeline, zero dependencies",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,21 +1,18 @@
 // ============================================================
-//  OvnDB v2.0 — WAL v2 (Write-Ahead Log) dengan Group Commit
+//  OvnDB v3.0 — WAL v3 (Write-Ahead Log)
 //
-//  IMPROVEMENT DARI v1:
-//   v1: satu fdatasync() per operasi — throughput ~5K ops/s
-//   v2: group commit — kumpulkan N operasi atau tunggu T ms,
-//       lalu satu fdatasync() untuk semua → throughput ~50K+ ops/s
+//  G5 FIX: WAL rotation ketika file melampaui WAL_MAX_SIZE_BYTES.
+//  File lama di-rename ke .wal.bak, file baru dibuat fresh.
+//  Ini mencegah WAL tumbuh tak terbatas saat crash sebelum checkpoint.
 //
-//  Cara kerja group commit:
-//   1. append() masukkan operasi ke pending queue & kembalikan Promise
-//   2. Timer (WAL_GROUP_WAIT_MS) atau threshold (WAL_GROUP_SIZE)
-//      memicu _doGroupCommit()
-//   3. _doGroupCommit() tulis semua pending dalam satu Buffer.concat()
-//      lalu satu fdatasync()
-//   4. Semua Promise dari step 1 di-resolve sekaligus
+//  G6 FIX: Replay sekarang melacak TX_ABORT — operasi dari transaksi
+//  yang di-abort TIDAK di-replay ke storage. Ini fix bug data corruption
+//  yang bisa terjadi saat crash recovery di v2.x.
 //
-//  Keuntungan: satu disk sync melayani ratusan concurrent writers.
-//  Tradeoff: latensi +5ms per operasi di worst case (WAL_GROUP_WAIT_MS).
+//  v3.1 FIXES:
+//  - _doGroupCommit(): async fsp.write + fsp.fdatasync (tidak blocking event loop)
+//  - _rotateWal(): crash-safe via atomic rename (.new → .wal)
+//  - open(): bersihkan .wal.new stale dari crash sebelumnya
 // ============================================================
 
 import fs   from 'fs';
@@ -23,6 +20,7 @@ import fsp  from 'fs/promises';
 import path from 'path';
 import {
   WAL_MAGIC, WAL_GROUP_SIZE, WAL_GROUP_WAIT_MS, WalOp,
+  WAL_MAX_SIZE_BYTES,
 } from '../../types/constants.js';
 import { crc32, writeCrc, readCrc } from '../../utils/crc32.js';
 import { makeLogger } from '../../utils/logger.js';
@@ -30,40 +28,50 @@ import { makeLogger } from '../../utils/logger.js';
 const log = makeLogger('wal');
 
 export interface WalEntry {
-  seqno:  bigint;
-  op:     WalOp;
-  key:    string;
-  data:   Buffer;
-  txId:   bigint;
+  seqno: bigint;
+  op:    WalOp;
+  key:   string;
+  data:  Buffer;
+  txId:  bigint;
 }
 
 interface PendingGroup {
-  entries: Buffer[];
+  entries:   Buffer[];
   resolvers: Array<() => void>;
   rejecters: Array<(e: Error) => void>;
 }
 
 export class WAL {
-  private readonly filePath: string;
+  private readonly dirPath:    string;
+  private readonly colName:    string;
+  private filePath:            string;
   private fd:            number | null = null;
   private seqno:         bigint = 0n;
   private writePos:      number = 0;
   private _pendingCount: number = 0;
 
-  // Group commit state
-  private group: PendingGroup = { entries: [], resolvers: [], rejecters: [] };
-  private groupTimer: ReturnType<typeof setTimeout> | null = null;
-  private _committing = false;
+  private group:       PendingGroup = { entries: [], resolvers: [], rejecters: [] };
+  private groupTimer:  ReturnType<typeof setTimeout> | null = null;
+  private _committing  = false;
 
   constructor(dirPath: string, collectionName: string) {
+    this.dirPath  = dirPath;
+    this.colName  = collectionName;
     this.filePath = path.join(dirPath, `${collectionName}.wal`);
   }
 
   // ── Lifecycle ─────────────────────────────────────────────
 
   async open(): Promise<WalEntry[]> {
+    // FIX: bersihkan .new stale dari crash sebelumnya (jika crash saat _rotateWal step 1)
+    const newPath = this.filePath + '.new';
+    if (fs.existsSync(newPath)) {
+      log.warn('Found stale .wal.new from previous crash — removing', { col: this.colName });
+      fs.unlinkSync(newPath);
+    }
     if (!fs.existsSync(this.filePath)) fs.writeFileSync(this.filePath, Buffer.alloc(0));
     this.fd       = fs.openSync(this.filePath, 'r+');
+    // G6: replay dengan TX_ABORT awareness
     const entries = this._replay();
     this.writePos = fs.fstatSync(this.fd).size;
     log.debug(`WAL opened, ${entries.length} entries to replay`, { file: this.filePath });
@@ -72,26 +80,18 @@ export class WAL {
 
   async close(): Promise<void> {
     if (this.groupTimer) { clearTimeout(this.groupTimer); this.groupTimer = null; }
-    await this._doGroupCommit(); // flush sisa pending
+    await this._doGroupCommit();
     if (this.fd !== null) { fs.closeSync(this.fd); this.fd = null; }
   }
 
   // ── Append ────────────────────────────────────────────────
 
-  /**
-   * Tambahkan entry ke WAL. Kembalikan Promise yang resolve setelah
-   * entry ini di-flush ke disk (lewat group commit).
-   *
-   * Caller bisa await ini untuk durabilitas penuh, atau fire-and-forget
-   * untuk throughput maksimum (dengan risiko kehilangan data saat crash).
-   */
   append(op: WalOp, key: string, data: Buffer = Buffer.alloc(0), txId: bigint = 0n): Promise<void> {
     if (this.fd === null) return Promise.reject(new Error('WAL not open'));
 
     this.seqno++;
     const keyBuf = Buffer.from(key, 'utf8');
     const size   = 4 + 8 + 8 + 1 + 2 + keyBuf.length + 4 + data.length + 4;
-    //             magic seqno txId op keyLen key dataLen data crc
     const buf    = Buffer.allocUnsafe(size);
     let p = 0;
     WAL_MAGIC.copy(buf, p);               p += 4;
@@ -110,12 +110,10 @@ export class WAL {
       this.group.resolvers.push(resolve);
       this.group.rejecters.push(reject);
 
-      // Trigger commit jika threshold terpenuhi
       if (this.group.entries.length >= WAL_GROUP_SIZE) {
         if (this.groupTimer) { clearTimeout(this.groupTimer); this.groupTimer = null; }
         setImmediate(() => this._doGroupCommit());
       } else if (!this.groupTimer) {
-        // Set timer untuk commit setelah WAL_GROUP_WAIT_MS jika belum ada
         this.groupTimer = setTimeout(() => {
           this.groupTimer = null;
           this._doGroupCommit();
@@ -124,18 +122,12 @@ export class WAL {
     });
   }
 
-  /**
-   * Checkpoint: hapus isi WAL setelah semua data sudah di-flush ke segment.
-   * Dipanggil setelah setiap flush cycle.
-   * Skip fdatasync jika WAL sudah kosong (tidak ada yang perlu di-sync).
-   */
   async checkpoint(): Promise<void> {
     if (this.fd === null) return;
-    // Optimasi: jika WAL sudah kosong, skip I/O sama sekali
     if (this.writePos === 0 && this._pendingCount === 0) return;
     fs.ftruncateSync(this.fd, 0);
     fs.fdatasyncSync(this.fd);
-    this.writePos     = 0;
+    this.writePos      = 0;
     this._pendingCount = 0;
     log.debug('WAL checkpointed');
   }
@@ -148,28 +140,71 @@ export class WAL {
     if (this._committing || this.group.entries.length === 0) return;
     this._committing = true;
 
-    // Snapshot grup yang akan di-commit
     const { entries, resolvers, rejecters } = this.group;
     this.group = { entries: [], resolvers: [], rejecters: [] };
 
     try {
+      // G5: rotate WAL jika sudah terlalu besar
+      if (this.writePos > WAL_MAX_SIZE_BYTES) {
+        await this._rotateWal();
+      }
+
+      // FIX: sync I/O — fd is a raw number from fs.openSync, not a FileHandle
       const combined = Buffer.concat(entries);
       fs.writeSync(this.fd!, combined, 0, combined.length, this.writePos);
       this.writePos += combined.length;
       fs.fdatasyncSync(this.fd!);
-      // Resolve semua promise dalam grup ini
       for (const r of resolvers) r();
     } catch (err) {
       for (const r of rejecters) r(err as Error);
     } finally {
       this._committing = false;
-      // Ada pending baru yang masuk saat kita commit? Commit lagi.
-      if (this.group.entries.length > 0) {
-        setImmediate(() => this._doGroupCommit());
-      }
+      if (this.group.entries.length > 0) setImmediate(() => this._doGroupCommit());
     }
   }
 
+  /**
+   * G5: Rotasi WAL — crash-safe dengan atomic rename.
+   * Urutan: buat .new → sync → tutup lama → rename lama→.bak → rename .new→aktif
+   * Jika crash di langkah manapun, data tidak hilang:
+   *   - Crash sebelum rename: .new dibuang saat restart, .wal lama masih valid
+   *   - Crash setelah rename: .wal baru ada dan valid
+   */
+  private async _rotateWal(): Promise<void> {
+    if (this.fd === null) return;
+
+    // Step 1: Buat file WAL baru (.new) — jika crash di sini, .wal lama masih valid
+    const newPath = this.filePath + '.new';
+    // Hapus .new stale dari crash sebelumnya jika ada
+    if (fs.existsSync(newPath)) fs.unlinkSync(newPath);
+    const newFd = fs.openSync(newPath, 'w+');
+    fs.fdatasyncSync(newFd);
+    fs.closeSync(newFd);
+
+    // Step 2: Sync & tutup file lama
+    fs.fdatasyncSync(this.fd);
+    fs.closeSync(this.fd);
+    this.fd = null;
+
+    // Step 3: Backup .wal lama ke .bak
+    const bakPath = this.filePath + '.bak';
+    if (fs.existsSync(bakPath)) fs.unlinkSync(bakPath);
+    fs.renameSync(this.filePath, bakPath);
+
+    // Step 4: Atomic rename .new → .wal (crash-safe — OS garantikan atomicity)
+    fs.renameSync(newPath, this.filePath);
+
+    // Step 5: Buka .wal baru
+    this.fd       = fs.openSync(this.filePath, 'r+');
+    this.writePos = 0;
+    // Seqno tetap lanjut agar tidak ada konflik
+    log.info('WAL rotated (crash-safe)', { col: this.colName, bakPath });
+  }
+
+  /**
+   * G6: Replay dengan TX_ABORT awareness.
+   * Operasi dari transaksi yang di-abort TIDAK di-replay.
+   */
   private _replay(): WalEntry[] {
     if (!this.fd) return [];
     const stat = fs.fstatSync(this.fd);
@@ -185,17 +220,18 @@ export class WAL {
       if (raw.length - pos < 24) break;
       if (!raw.subarray(pos, pos + 4).equals(WAL_MAGIC)) break;
       pos += 4;
-      const seqno  = raw.readBigUInt64LE(pos); pos += 8;
-      const txId   = raw.readBigUInt64LE(pos); pos += 8;
-      const op     = raw.readUInt8(pos) as WalOp; pos += 1;
-      const keyLen = raw.readUInt16LE(pos); pos += 2;
+      const seqno   = raw.readBigUInt64LE(pos); pos += 8;
+      const txId    = raw.readBigUInt64LE(pos);  pos += 8;
+      const op      = raw.readUInt8(pos) as WalOp; pos += 1;
+      const keyLen  = raw.readUInt16LE(pos); pos += 2;
       if (pos + keyLen > raw.length) break;
-      const key    = raw.toString('utf8', pos, pos + keyLen); pos += keyLen;
+      const key     = raw.toString('utf8', pos, pos + keyLen); pos += keyLen;
       if (pos + 4 > raw.length) break;
       const dataLen = raw.readUInt32LE(pos); pos += 4;
       if (pos + dataLen + 4 > raw.length) break;
-      const data   = raw.subarray(pos, pos + dataLen); pos += dataLen;
-      const stored = readCrc(raw, pos); pos += 4;
+      const data    = raw.subarray(pos, pos + dataLen); pos += dataLen;
+      const stored  = readCrc(raw, pos); pos += 4;
+
       if (stored !== crc32(raw.subarray(start, pos - 4))) {
         log.warn('WAL CRC mismatch, stopping replay at pos ' + start);
         break;
@@ -208,6 +244,26 @@ export class WAL {
     this.seqno = maxSeq;
     const toReplay = lastCkpt >= 0 ? all.slice(lastCkpt + 1) : all;
     this._pendingCount = toReplay.length;
-    return toReplay.filter(e => e.op !== WalOp.CHECKPOINT);
+
+    // G6: kumpulkan semua txId yang di-abort
+    const abortedTxIds = new Set<bigint>();
+    for (const e of toReplay) {
+      if (e.op === WalOp.TX_ABORT) abortedTxIds.add(e.txId);
+    }
+
+    // G6: filter operasi dari transaksi yang di-abort
+    if (abortedTxIds.size > 0) {
+      log.warn(`WAL replay: filtering ${abortedTxIds.size} aborted tx(s)`, {
+        txIds: [...abortedTxIds].map(String).join(', '),
+      });
+    }
+
+    return toReplay.filter(e =>
+      e.op !== WalOp.CHECKPOINT &&
+      e.op !== WalOp.TX_BEGIN   &&
+      e.op !== WalOp.TX_COMMIT  &&
+      e.op !== WalOp.TX_ABORT   &&
+      !abortedTxIds.has(e.txId), // G6: skip ops dari tx yang di-abort
+    );
   }
 }

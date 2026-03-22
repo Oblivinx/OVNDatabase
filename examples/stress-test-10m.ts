@@ -90,8 +90,8 @@ async function main() {
   // FASE 2: STATISTIK
   console.log(`\n[FASE 2] Melihat Statistik Database...`);
   const stats = await logs.stats();
-  console.log(`  Live count : ${fmt(stats.liveCount)}`);
-  console.log(`  File size  : ${mb(stats.fileSize)}`);
+  console.log(`  Live count : ${fmt(Number(stats.totalLive))}`);
+  console.log(`  File size  : ${mb(stats.totalFileSize)}`);
   console.log(`  Cache hit  : ${pct(stats.cacheHitRate)}`);
 
   // FASE 3: RANDOM READ

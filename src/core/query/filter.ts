@@ -9,9 +9,33 @@
 //   Array:      $size $all $elemMatch
 //
 //  Design: pure functions, tidak ada side effects, mudah di-test.
+//
+//  v3.1 FIXES:
+//  - $regex: compile sekali per unique pattern via _regexCache (fix ~10x slowdown di regex queries)
 // ============================================================
 
 import type { QueryFilter, FieldOps, Scalar, UpdateSpec } from '../../types/index.js';
+
+// FIX: Cache compiled RegExp agar tidak di-compile ulang setiap match call.
+// Full scan 1M dokumen dengan $regex tanpa cache = 1M RegExp object allocations.
+// Keyed by "pattern::flags" string. WeakMap tidak cocok karena key harus string.
+const _regexCache = new Map<string, RegExp>();
+
+function _getOrCompileRegex(pattern: string | RegExp, flags?: string): RegExp {
+  if (pattern instanceof RegExp) return pattern;
+  const cacheKey = `${pattern}::${flags ?? ''}`;
+  let re = _regexCache.get(cacheKey);
+  if (!re) {
+    re = new RegExp(pattern, flags);
+    // Batas cache 512 entries — cegah memory leak untuk query patterns yang sangat beragam
+    if (_regexCache.size >= 512) {
+      const firstKey = _regexCache.keys().next().value!;
+      _regexCache.delete(firstKey);
+    }
+    _regexCache.set(cacheKey, re);
+  }
+  return re;
+}
 
 // ── Filter Matching ──────────────────────────────────────────
 
@@ -69,7 +93,8 @@ function matchField(val: unknown, condition: Scalar | FieldOps): boolean {
 
   if ('$regex' in ops) {
     if (typeof val !== 'string') return false;
-    const re = ops.$regex instanceof RegExp ? ops.$regex : new RegExp(ops.$regex as string);
+    // FIX: pakai cache — tidak compile RegExp baru setiap call
+    const re = _getOrCompileRegex(ops.$regex as string | RegExp, (ops as Record<string, unknown>)['$options'] as string | undefined);
     if (!re.test(val)) return false;
   }
 
@@ -87,18 +112,45 @@ function matchField(val: unknown, condition: Scalar | FieldOps): boolean {
   if ('$elemMatch' in ops) {
     if (!Array.isArray(val)) return false;
     const spec = ops.$elemMatch as QueryFilter;
-    // Cek apakah semua key dalam spec adalah operator ($gte, $lt, dll)
-    // Jika ya → ini adalah scalar element match (misal: scores: { $elemMatch: { $gte: 90 } })
     const isScalarMatch = Object.keys(spec).every(k => k.startsWith('$'));
     if (isScalarMatch) {
-      // Terapkan operator langsung ke setiap elemen scalar
       if (!(val as unknown[]).some(elem => matchField(elem, spec as FieldOps))) return false;
     } else {
-      // Elemen adalah object → gunakan matchFilter
       if (!(val as Record<string, unknown>[]).some(elem =>
         matchFilter(elem as Record<string, unknown>, spec)
       )) return false;
     }
+  }
+
+  // G10: $type — cek tipe nilai field
+  if ('$type' in ops) {
+    const expected = (ops as Record<string, unknown>)['$type'] as string;
+    const actual = val === null
+      ? 'null'
+      : Array.isArray(val)
+      ? 'array'
+      : typeof val;
+    if (actual !== expected) return false;
+  }
+
+  // G10: $where — evaluasi fungsi predikat kustom
+  if ('$where' in ops) {
+    const predicate = (ops as Record<string, unknown>)['$where'];
+    if (typeof predicate === 'function') {
+      try { if (!predicate(val)) return false; } catch { return false; }
+    }
+  }
+
+  // G10: $mod — modulo check: [divisor, remainder]
+  if ('$mod' in ops) {
+    const [divisor, remainder] = (ops as Record<string, unknown>)['$mod'] as [number, number];
+    if (typeof val !== 'number' || val % divisor !== remainder) return false;
+  }
+
+  // G10: $not — negasi dari kondisi
+  if ('$not' in ops) {
+    const inner = (ops as Record<string, unknown>)['$not'] as FieldOps;
+    if (matchField(val, inner)) return false;
   }
 
   return true;

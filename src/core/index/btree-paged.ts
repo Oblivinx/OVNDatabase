@@ -1,74 +1,58 @@
 // ============================================================
-//  OvnDB v2.0 — On-disk Paged B+ Tree
+//  OvnDB v3.0 — On-disk Paged B+ Tree
 //
-//  PERBEDAAN KRITIS DARI v1:
-//   v1: seluruh tree di RAM → 1B record = ~30 GB RAM hanya index
-//   v2: tree di disk, hanya page yang diakses masuk buffer pool →
-//       1T record membutuhkan ~256 MB buffer pool (bukan 30 TB)
-//
-//  Struktur:
-//   - Internal node: keys[] + childPageIds[] — navigasi ke bawah
-//   - Leaf node: keys[] + RecordPointer[] + linked list (next/prev page)
-//   - T = 128 → setiap node bisa punya 255 key → height ≤ 4 untuk 1T records
-//
-//  Read path:  cache hit O(1), disk O(height × page_io) = ~4 I/O
-//  Write path: cari leaf → modifikasi → split jika penuh → mark dirty
-//  Range scan: mulai dari leaf → follow nextPage pointer
-//
-//  Semua operasi disk di-delegate ke PageManager (buffer pool).
+//  G7 FIX: tambah clear() untuk reset tree ke state awal O(1).
+//  G8 FIX: entries() sekarang support limit/offset untuk cursor pagination.
+//  Semua operasi existing dipertahankan.
 // ============================================================
 
 import { PageManager, PAGE_HEADER_SIZE, PAGE_DATA_SIZE } from '../storage/page-manager.js';
 import { PageType } from '../../types/constants.js';
 import type { RecordPointer } from '../../types/index.js';
 
-// Min-degree T: setiap node (kecuali root) punya minimal T-1 key
 const T        = 128;
-const MAX_KEYS = 2 * T - 1; // 255 key per node
-
-// ── Serialisasi key-value dalam page data ─────────────────────
-//
-//  Internal node data layout:
-//   [2] keyCount
-//   [keyCount × (2 + keyBytes)] key entries: [2 len][bytes key]
-//   [keyCount+1 × 4] child page IDs (uint32)
-//
-//  Leaf node data layout:
-//   [2] keyCount
-//   [keyCount × (2 + keyBytes + 4+8+4+4+8)] entries:
-//     [2 len][key bytes][4 segId][8 offset][4 totalSize][4 dataSize][8 txId]
-
-const POINTER_SIZE = 4 + 8 + 4 + 4 + 8; // 28 bytes per RecordPointer
-const CHILD_SIZE   = 4;                  // 4 bytes per child page ID (uint32)
+const MAX_KEYS = 2 * T - 1;
+const POINTER_SIZE = 4 + 8 + 4 + 4 + 8;
+const CHILD_SIZE   = 4;
 
 export class PagedBPlusTree {
   private readonly pm: PageManager;
   private _size: bigint = 0n;
-  // ID leaf terkiri & terkanan (untuk full scan tanpa traversal)
   private _firstLeafId: number = 0;
   private _lastLeafId:  number = 0;
 
-  constructor(pm: PageManager) {
-    this.pm = pm;
-  }
+  constructor(pm: PageManager) { this.pm = pm; }
 
   get size(): bigint { return this._size; }
 
-  // ── Inisialisasi ─────────────────────────────────────────
-
   async init(): Promise<void> {
     if (this.pm.totalPages === 0) {
-      // Tree baru — buat root leaf kosong
       const { pageId } = await this.pm.allocPage(PageType.LEAF);
-      this.pm.rootPage   = pageId;
-      this._firstLeafId  = pageId;
-      this._lastLeafId   = pageId;
+      this.pm.rootPage  = pageId;
+      this._firstLeafId = pageId;
+      this._lastLeafId  = pageId;
     } else {
-      // Tree sudah ada — cari leaf terkiri (ikuti anak pertama internal node)
       this._firstLeafId = await this._findFirstLeaf(this.pm.rootPage);
       this._lastLeafId  = await this._findLastLeaf(this.pm.rootPage);
     }
   }
+
+  // ── G7: clear() — reset tree ke state awal O(1) ──────────
+
+  /**
+   * Hapus semua entry dan reset tree ke root leaf kosong.
+   * O(1) — tidak ada loop per-record.
+   * Dipakai oleh StorageEngine.deleteAll().
+   */
+  async clear(): Promise<void> {
+    await this.pm.reset();          // truncate file ke header saja
+    await this.init();              // buat root leaf baru
+    this._size = 0n;
+  }
+
+  // ── G8: count() — hitung semua entry ──────────────────────
+
+  async count(): Promise<bigint> { return this._size; }
 
   // ── Public API ───────────────────────────────────────────
 
@@ -90,12 +74,10 @@ export class PagedBPlusTree {
     const { keys, vals } = this._readLeaf(page.data);
 
     if (idx < keys.length && keys[idx] === key) {
-      // Update existing
       vals[idx] = val;
       this._writeLeaf(page.data, page.header, keys, vals);
       this.pm.markDirty(leafId);
     } else {
-      // Insert baru
       await this._insert(key, val);
       this._size++;
     }
@@ -106,22 +88,16 @@ export class PagedBPlusTree {
     const page = await this.pm.readPage(leafId);
     const { keys, vals } = this._readLeaf(page.data);
     if (idx >= keys.length || keys[idx] !== key) return false;
-
     keys.splice(idx, 1);
     vals.splice(idx, 1);
     page.header.keyCount--;
     this._writeLeaf(page.data, page.header, keys, vals);
     this.pm.markDirty(leafId);
-    this._size--;
+    if (this._size > 0n) this._size--;
     return true;
   }
 
-  /**
-   * Range scan — yield semua entry dengan key >= gte && <= lte.
-   * Menggunakan linked list antar leaf (nextPage) → O(k) bukan O(n log n).
-   */
   async *range(gte?: string, lte?: string): AsyncIterableIterator<[string, RecordPointer]> {
-    // Mulai dari leaf yang paling kiri atau leaf yang mengandung gte
     const startLeafId = gte
       ? (await this._findInLeaf(gte)).leafId
       : this._firstLeafId;
@@ -140,9 +116,19 @@ export class PagedBPlusTree {
     }
   }
 
-  /** Iterasi semua entry dalam urutan key. */
-  async *entries(): AsyncIterableIterator<[string, RecordPointer]> {
-    yield* this.range();
+  /**
+   * G8: entries() dengan support limit dan after (cursor pagination).
+   * Jauh lebih efisien dari meload semua entry lalu slice.
+   */
+  async *entries(opts?: { gte?: string; limit?: number; after?: string }): AsyncIterableIterator<[string, RecordPointer]> {
+    let emitted = 0;
+    const limit = opts?.limit ?? Infinity;
+    for await (const [k, ptr] of this.range(opts?.gte)) {
+      if (emitted >= limit) return;
+      if (opts?.after && k <= opts.after) continue;
+      yield [k, ptr];
+      emitted++;
+    }
   }
 
   // ── Insert + Split ────────────────────────────────────────
@@ -150,10 +136,8 @@ export class PagedBPlusTree {
   private async _insert(key: string, val: RecordPointer): Promise<void> {
     const root = await this.pm.readPage(this.pm.rootPage);
     if (root.header.keyCount >= MAX_KEYS) {
-      // Root penuh — buat root baru, jadikan root lama anak kiri
       const { pageId: newRootId, page: newRoot } = await this.pm.allocPage(PageType.INTERNAL);
       const oldRootId = this.pm.rootPage;
-      // Simpan ID anak pertama di awal data internal node
       const children = [oldRootId];
       this._writeInternal(newRoot.data, newRoot.header, [], children);
       this.pm.markDirty(newRootId);
@@ -165,7 +149,6 @@ export class PagedBPlusTree {
 
   private async _insertNonFull(pageId: number, key: string, val: RecordPointer): Promise<void> {
     const page = await this.pm.readPage(pageId);
-
     if (page.header.pageType === PageType.LEAF) {
       const { keys, vals } = this._readLeaf(page.data);
       const idx = this._bsearch(keys, key);
@@ -180,11 +163,8 @@ export class PagedBPlusTree {
       if (i < keys.length && keys[i] === key) i++;
       const childId = children[i]!;
       const child   = await this.pm.readPage(childId);
-
       if (child.header.keyCount >= MAX_KEYS) {
         await this._splitChild(pageId, i, childId);
-        // Setelah split, parent sudah diupdate di disk — baca ulang untuk dapat
-        // children terbaru (split menambahkan satu child baru di posisi i+1)
         const updated = this._readInternal(page.data);
         if (i < updated.keys.length && key > updated.keys[i]!) i++;
         await this._insertNonFull(updated.children[i]!, key, val);
@@ -201,12 +181,9 @@ export class PagedBPlusTree {
     if (child.header.pageType === PageType.LEAF) {
       const { keys, vals } = this._readLeaf(child.data);
       const mid = Math.floor(keys.length / 2);
-
       const { pageId: rightId, page: right } = await this.pm.allocPage(PageType.LEAF);
       const rightKeys = keys.splice(mid);
       const rightVals = vals.splice(mid);
-
-      // Update linked list
       right.header.nextPage = child.header.nextPage;
       right.header.prevPage = childId;
       if (child.header.nextPage) {
@@ -217,13 +194,10 @@ export class PagedBPlusTree {
         this._lastLeafId = rightId;
       }
       child.header.nextPage = rightId;
-
       this._writeLeaf(child.data, child.header, keys, vals);
       this._writeLeaf(right.data, right.header, rightKeys, rightVals);
       this.pm.markDirty(childId);
       this.pm.markDirty(rightId);
-
-      // Separator key = first key di right
       const { keys: pKeys, children: pChildren } = this._readInternal(parent.data);
       pKeys.splice(i, 0, rightKeys[0]!);
       pChildren.splice(i + 1, 0, rightId);
@@ -236,7 +210,6 @@ export class PagedBPlusTree {
       const median  = keys.splice(mid, 1)[0]!;
       const rightKeys     = keys.splice(mid);
       const rightChildren = children.splice(mid + 1);
-
       const { pageId: rightId, page: right } = await this.pm.allocPage(PageType.INTERNAL);
       child.header.keyCount = keys.length;
       right.header.keyCount = rightKeys.length;
@@ -244,7 +217,6 @@ export class PagedBPlusTree {
       this._writeInternal(right.data, right.header, rightKeys, rightChildren);
       this.pm.markDirty(childId);
       this.pm.markDirty(rightId);
-
       const { keys: pKeys, children: pChildren } = this._readInternal(parent.data);
       pKeys.splice(i, 0, median);
       pChildren.splice(i + 1, 0, rightId);
@@ -253,8 +225,6 @@ export class PagedBPlusTree {
       this.pm.markDirty(parentId);
     }
   }
-
-  // ── Navigasi ─────────────────────────────────────────────
 
   private async _findInLeaf(key: string): Promise<{ leafId: number; idx: number }> {
     let pageId = this.pm.rootPage;
@@ -294,11 +264,8 @@ export class PagedBPlusTree {
     return lo;
   }
 
-  // ── Serialisasi Page Data ─────────────────────────────────
-
   private _readLeaf(data: Buffer): { keys: string[]; vals: RecordPointer[] } {
-    const keys: string[] = [];
-    const vals: RecordPointer[] = [];
+    const keys: string[] = []; const vals: RecordPointer[] = [];
     if (data.length < 2) return { keys, vals };
     const count = data.readUInt16LE(0);
     let pos = 2;
@@ -326,19 +293,18 @@ export class PagedBPlusTree {
     let pos = 2;
     for (let i = 0; i < keys.length; i++) {
       const kb = Buffer.from(keys[i]!, 'utf8');
-      data.writeUInt16LE(kb.length, pos);          pos += 2;
-      kb.copy(data, pos);                          pos += kb.length;
-      data.writeUInt32LE(vals[i]!.segmentId, pos); pos += 4;
+      data.writeUInt16LE(kb.length, pos);           pos += 2;
+      kb.copy(data, pos);                           pos += kb.length;
+      data.writeUInt32LE(vals[i]!.segmentId, pos);  pos += 4;
       data.writeBigUInt64LE(BigInt(vals[i]!.offset), pos); pos += 8;
-      data.writeUInt32LE(vals[i]!.totalSize, pos); pos += 4;
-      data.writeUInt32LE(vals[i]!.dataSize, pos);  pos += 4;
-      data.writeBigUInt64LE(vals[i]!.txId, pos);   pos += 8;
+      data.writeUInt32LE(vals[i]!.totalSize, pos);  pos += 4;
+      data.writeUInt32LE(vals[i]!.dataSize, pos);   pos += 4;
+      data.writeBigUInt64LE(vals[i]!.txId, pos);    pos += 8;
     }
   }
 
   private _readInternal(data: Buffer): { keys: string[]; children: number[] } {
-    const keys: string[] = [];
-    const children: number[] = [];
+    const keys: string[] = []; const children: number[] = [];
     if (data.length < 2) return { keys, children };
     const keyCount = data.readUInt16LE(0);
     let pos = 2;

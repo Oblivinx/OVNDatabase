@@ -103,6 +103,26 @@ async function applyStage(
     }, lookupResolver);
   }
 
+  // G11: $bucket — distribusikan dokumen ke range/boundary buckets
+  if ('$bucket' in stage) {
+    return applyBucket(docs, (stage as Record<string, unknown>)['$bucket'] as BucketSpec);
+  }
+
+  // G11: $facet — jalankan multiple sub-pipeline secara paralel
+  if ('$facet' in stage && lookupResolver) {
+    return applyFacet(docs, (stage as Record<string, unknown>)['$facet'] as Record<string, AggregationStage[]>, lookupResolver);
+  }
+
+  // G11: $densify — isi gap dalam sequence (berguna untuk time-series)
+  if ('$densify' in stage) {
+    return applyDensify(docs, (stage as Record<string, unknown>)['$densify'] as DensifySpec);
+  }
+
+  // G11: $setWindowFields — window functions (running total, rank, dll)
+  if ('$setWindowFields' in stage) {
+    return applySetWindowFields(docs, (stage as Record<string, unknown>)['$setWindowFields'] as WindowFieldsSpec);
+  }
+
   return docs;
 }
 
@@ -364,4 +384,194 @@ function evaluateExpression(
     return val ?? fallback;
   }
   return null;
+}
+
+// ── G11: Type helpers ─────────────────────────────────────────
+
+interface BucketSpec {
+  groupBy:     string;
+  boundaries:  number[];
+  default?:    string;
+  output?:     Record<string, Record<string, unknown>>;
+}
+
+interface DensifySpec {
+  field:      string;
+  range:      { step: number; bounds: [number, number] | 'full' | 'partition' };
+  partitionByFields?: string[];
+}
+
+interface WindowFieldsSpec {
+  sortBy:  Record<string, 1 | -1>;
+  output:  Record<string, { $sum?: unknown; $avg?: unknown; $rank?: Record<string, unknown>; $denseRank?: Record<string, unknown>; window?: { documents?: [string | number, string | number] } }>;
+}
+
+// ── G11: $bucket ─────────────────────────────────────────────
+
+function applyBucket(docs: Record<string, unknown>[], spec: BucketSpec): Record<string, unknown>[] {
+  const { groupBy, boundaries, default: def, output } = spec;
+  const fieldPath = groupBy.startsWith('$') ? groupBy.slice(1) : groupBy;
+
+  // Inisialisasi bucket untuk setiap interval + optional default bucket
+  const buckets = new Map<string, { _id: unknown; count: number; docs: Record<string, unknown>[] }>();
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const key = String(boundaries[i]);
+    buckets.set(key, { _id: boundaries[i], count: 0, docs: [] });
+  }
+  if (def !== undefined) buckets.set('__default__', { _id: def, count: 0, docs: [] });
+
+  for (const doc of docs) {
+    const val = getFieldValue(doc, fieldPath);
+    if (typeof val !== 'number') {
+      if (def !== undefined) {
+        const bucket = buckets.get('__default__')!;
+        bucket.count++;
+        bucket.docs.push(doc);
+      }
+      continue;
+    }
+
+    let placed = false;
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const lo = boundaries[i]!;
+      const hi = boundaries[i + 1]!;
+      if (val >= lo && val < hi) {
+        const bucket = buckets.get(String(lo))!;
+        bucket.count++;
+        bucket.docs.push(doc);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed && def !== undefined) {
+      const bucket = buckets.get('__default__')!;
+      bucket.count++;
+      bucket.docs.push(doc);
+    }
+  }
+
+  return [...buckets.values()].map(({ _id, count, docs: grpDocs }) => {
+    const result: Record<string, unknown> = { _id, count };
+    if (output) {
+      for (const [field, expr] of Object.entries(output)) {
+        result[field] = evaluateAccumulator(expr as Record<string, unknown>, grpDocs);
+      }
+    }
+    return result;
+  }).filter(b => (b['count'] as number) > 0 || b['_id'] === def);
+}
+
+// ── G11: $facet ──────────────────────────────────────────────
+
+async function applyFacet(
+  docs: Record<string, unknown>[],
+  facets: Record<string, AggregationStage[]>,
+  lookupResolver: (c: string) => Promise<Record<string, unknown>[]>,
+): Promise<Record<string, unknown>[]> {
+  const result: Record<string, unknown> = {};
+  // Jalankan semua sub-pipeline secara paralel
+  await Promise.all(
+    Object.entries(facets).map(async ([name, pipeline]) => {
+      const exec = compilePipeline(pipeline, lookupResolver);
+      result[name] = await exec([...docs]); // copy agar tidak saling mempengaruhi
+    }),
+  );
+  return [result]; // $facet selalu return satu dokumen
+}
+
+// ── G11: $densify ─────────────────────────────────────────────
+
+function applyDensify(docs: Record<string, unknown>[], spec: DensifySpec): Record<string, unknown>[] {
+  const { field, range } = spec;
+  if (range.bounds === 'full' || range.bounds === 'partition') return docs; // simplified
+
+  const [lo, hi] = range.bounds;
+  const step = range.step;
+  const existing = new Set(docs.map(d => getFieldValue(d, field)));
+  const result = [...docs];
+
+  for (let v = lo; v <= hi; v += step) {
+    if (!existing.has(v)) {
+      result.push({ [field]: v });
+    }
+  }
+
+  return result.sort((a, b) => {
+    const av = getFieldValue(a, field) as number;
+    const bv = getFieldValue(b, field) as number;
+    return av - bv;
+  });
+}
+
+// ── G11: $setWindowFields ─────────────────────────────────────
+
+function applySetWindowFields(
+  docs: Record<string, unknown>[],
+  spec: WindowFieldsSpec,
+): Record<string, unknown>[] {
+  const { sortBy, output } = spec;
+
+  // Sort docs sesuai sortBy
+  const entries = Object.entries(sortBy);
+  const sorted = [...docs].sort((a, b) => {
+    for (const [f, dir] of entries) {
+      const av = getFieldValue(a, f);
+      const bv = getFieldValue(b, f);
+      const cmp = av === bv ? 0 : (av as number) < (bv as number) ? -1 : 1;
+      if (cmp !== 0) return cmp * dir;
+    }
+    return 0;
+  });
+
+  return sorted.map((doc, idx) => {
+    const result = { ...doc };
+    for (const [outField, expr] of Object.entries(output)) {
+      const windowDocs = spec.output[outField]?.window?.documents
+        ? getWindowDocs(sorted, idx, spec.output[outField]!.window!.documents!)
+        : sorted.slice(0, idx + 1); // default: from start to current
+
+      if ('$sum' in expr) {
+        const path = typeof expr.$sum === 'string' && (expr.$sum as string).startsWith('$')
+          ? (expr.$sum as string).slice(1) : null;
+        result[outField] = path
+          ? windowDocs.reduce((s, d) => s + ((getFieldValue(d, path) as number) || 0), 0)
+          : (expr.$sum as number) * windowDocs.length;
+      } else if ('$avg' in expr) {
+        const path = typeof expr.$avg === 'string' && (expr.$avg as string).startsWith('$')
+          ? (expr.$avg as string).slice(1) : null;
+        if (path) {
+          const nums = windowDocs.map(d => getFieldValue(d, path)).filter(v => typeof v === 'number') as number[];
+          result[outField] = nums.length ? nums.reduce((s, v) => s + v, 0) / nums.length : null;
+        }
+      } else if ('$rank' in expr) {
+        // Rank: 1-based, ties get same rank
+        const sortField = Object.keys(sortBy)[0]!;
+        const val = getFieldValue(doc, sortField);
+        result[outField] = sorted.filter(d =>
+          (getFieldValue(d, sortField) as number) < (val as number)
+        ).length + 1;
+      } else if ('$denseRank' in expr) {
+        const sortField = Object.keys(sortBy)[0]!;
+        const val = getFieldValue(doc, sortField);
+        const uniqueSmaller = new Set(
+          sorted
+            .filter(d => (getFieldValue(d, sortField) as number) < (val as number))
+            .map(d => getFieldValue(d, sortField))
+        );
+        result[outField] = uniqueSmaller.size + 1;
+      }
+    }
+    return result;
+  });
+}
+
+function getWindowDocs(
+  sorted: Record<string, unknown>[],
+  currentIdx: number,
+  window: [string | number, string | number],
+): Record<string, unknown>[] {
+  const [start, end] = window;
+  const lo = start === 'unbounded' ? 0 : currentIdx + (start as number);
+  const hi = end   === 'current'   ? currentIdx : end === 'unbounded' ? sorted.length - 1 : currentIdx + (end as number);
+  return sorted.slice(Math.max(0, lo), Math.min(sorted.length, hi + 1));
 }

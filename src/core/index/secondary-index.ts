@@ -68,12 +68,21 @@ export class SecondaryIndexManager {
   async save(): Promise<void> {
     for (const [field, state] of this.indexes) {
       if (!state.dirty) continue;
-      const data = this._serialize(state);
-      const tmp  = this._idxPath(field) + '.tmp';
-      await fsp.writeFile(tmp, JSON.stringify(data), 'utf8');
-      await fsp.rename(tmp, this._idxPath(field));
-      state.dirty = false;
-      log.debug(`Saved index "${field}"`, { entries: state.map.size });
+      const data    = this._serialize(state);
+      const idxPath = this._idxPath(field);
+      const tmp     = idxPath + '.tmp';
+      try {
+        // Ensure directory exists before writing (first save may precede segment creation)
+        await fsp.mkdir(path.dirname(tmp), { recursive: true });
+        await fsp.writeFile(tmp, JSON.stringify(data), 'utf8');
+        await fsp.rename(tmp, idxPath);
+        state.dirty = false;
+        log.debug(`Saved index "${field}"`, { entries: state.map.size });
+      } catch (err) {
+        log.error(`Failed to save index "${field}"`, { err: String(err) });
+        // Clean up stale .tmp if rename failed but writeFile succeeded
+        try { await fsp.unlink(tmp); } catch { /* ignore */ }
+      }
     }
   }
 
