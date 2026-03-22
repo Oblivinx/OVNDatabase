@@ -1,0 +1,2446 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>OvnDB v4.0 — Dokumentasi Lengkap</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&family=Inter:wght@300;400;500&display=swap"
+        rel="stylesheet" />
+    <style>
+        :root {
+            --bg: #080c10;
+            --bg2: #0d1117;
+            --bg3: #111820;
+            --border: #1e2d3d;
+            --border2: #243447;
+            --accent: #00e5a0;
+            --accent2: #00b8ff;
+            --accent3: #ff6b35;
+            --accent4: #a855f7;
+            --text: #c9d1d9;
+            --text-dim: #6e7f8e;
+            --text-head: #e8eef4;
+            --code-bg: #0a1520;
+            --code-str: #a8ff78;
+            --code-kw: #79b8ff;
+            --code-fn: #ffab70;
+            --code-num: #f97583;
+            --code-cmt: #4a6a7a;
+            --code-cls: #b392f0;
+            --tag: rgba(0, 229, 160, 0.12);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            font-size: 15px;
+            line-height: 1.7;
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* ── Sidebar ────────────────────────────── */
+        .sidebar {
+            width: 280px;
+            min-height: 100vh;
+            background: var(--bg2);
+            border-right: 1px solid var(--border);
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb {
+            background: var(--border2);
+            border-radius: 2px;
+        }
+
+        .sidebar-logo {
+            padding: 24px 20px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo-name {
+            font-family: 'Syne', sans-serif;
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            color: var(--text-head);
+        }
+
+        .logo-name span {
+            color: var(--accent);
+        }
+
+        .logo-version {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--accent);
+            background: var(--tag);
+            border: 1px solid rgba(0, 229, 160, 0.25);
+            border-radius: 4px;
+            padding: 2px 8px;
+            display: inline-block;
+            margin-top: 6px;
+        }
+
+        .logo-sub {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        nav {
+            padding: 12px 0;
+            flex: 1;
+        }
+
+        .nav-section {
+            padding: 8px 20px 4px;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        nav a {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 20px;
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 13px;
+            transition: all 0.15s;
+            border-left: 2px solid transparent;
+            position: relative;
+        }
+
+        nav a:hover {
+            color: var(--text-head);
+            background: rgba(255, 255, 255, 0.03);
+            border-left-color: var(--border2);
+        }
+
+        nav a.active {
+            color: var(--accent);
+            background: rgba(0, 229, 160, 0.06);
+            border-left-color: var(--accent);
+        }
+
+        nav a .dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+            opacity: 0.5;
+            flex-shrink: 0;
+        }
+
+        .sidebar-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            font-size: 11px;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* ── Main ───────────────────────────────── */
+        .main {
+            margin-left: 280px;
+            flex: 1;
+            max-width: 900px;
+            padding: 48px 56px;
+        }
+
+        section {
+            padding-top: 80px;
+            margin-top: -40px;
+        }
+
+        /* ── Hero ───────────────────────────────── */
+        .hero {
+            padding: 0 0 60px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 0;
+        }
+
+        .hero-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--accent2);
+            background: rgba(0, 184, 255, 0.1);
+            border: 1px solid rgba(0, 184, 255, 0.2);
+            border-radius: 100px;
+            padding: 4px 12px;
+            display: inline-block;
+            margin-bottom: 20px;
+            letter-spacing: 0.5px;
+        }
+
+        .hero h1 {
+            font-family: 'Syne', sans-serif;
+            font-size: 54px;
+            font-weight: 800;
+            line-height: 1.05;
+            letter-spacing: -2px;
+            color: var(--text-head);
+            margin-bottom: 20px;
+        }
+
+        .hero h1 span {
+            color: var(--accent);
+        }
+
+        .hero-desc {
+            font-size: 17px;
+            color: var(--text-dim);
+            max-width: 600px;
+            line-height: 1.7;
+            margin-bottom: 32px;
+        }
+
+        .hero-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+
+        .tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 4px;
+            border: 1px solid;
+        }
+
+        .tag-green {
+            color: var(--accent);
+            border-color: rgba(0, 229, 160, 0.3);
+            background: rgba(0, 229, 160, 0.07);
+        }
+
+        .tag-blue {
+            color: var(--accent2);
+            border-color: rgba(0, 184, 255, 0.3);
+            background: rgba(0, 184, 255, 0.07);
+        }
+
+        .tag-orange {
+            color: var(--accent3);
+            border-color: rgba(255, 107, 53, 0.3);
+            background: rgba(255, 107, 53, 0.07);
+        }
+
+        .tag-purple {
+            color: var(--accent4);
+            border-color: rgba(168, 85, 247, 0.3);
+            background: rgba(168, 85, 247, 0.07);
+        }
+
+        /* ── Why Section ────────────────────────── */
+        .why-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-top: 24px;
+        }
+
+        .why-card {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            transition: border-color 0.2s;
+        }
+
+        .why-card:hover {
+            border-color: var(--border2);
+        }
+
+        .why-card-icon {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+
+        .why-card-title {
+            font-family: 'Syne', sans-serif;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text-head);
+            margin-bottom: 6px;
+        }
+
+        .why-card-desc {
+            font-size: 13px;
+            color: var(--text-dim);
+            line-height: 1.6;
+        }
+
+        /* ── Headings ───────────────────────────── */
+        h2 {
+            font-family: 'Syne', sans-serif;
+            font-size: 32px;
+            font-weight: 800;
+            letter-spacing: -1px;
+            color: var(--text-head);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        h2 .icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        h2 .icon.green {
+            background: rgba(0, 229, 160, 0.12);
+        }
+
+        h2 .icon.blue {
+            background: rgba(0, 184, 255, 0.12);
+        }
+
+        h2 .icon.orange {
+            background: rgba(255, 107, 53, 0.12);
+        }
+
+        h2 .icon.purple {
+            background: rgba(168, 85, 247, 0.12);
+        }
+
+        h3 {
+            font-family: 'Syne', sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-head);
+            margin: 28px 0 12px;
+        }
+
+        h4 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--accent2);
+            margin: 20px 0 8px;
+            letter-spacing: 0.3px;
+        }
+
+        p {
+            color: var(--text);
+            margin-bottom: 14px;
+            font-size: 14px;
+            line-height: 1.75;
+        }
+
+        .section-lead {
+            font-size: 15px;
+            color: var(--text-dim);
+            margin-bottom: 24px;
+            line-height: 1.7;
+            border-left: 3px solid var(--border2);
+            padding-left: 16px;
+        }
+
+        /* ── Code Blocks ────────────────────────── */
+        pre {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px 22px;
+            overflow-x: auto;
+            margin: 16px 0 24px;
+            position: relative;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12.5px;
+            line-height: 1.8;
+        }
+
+        pre::-webkit-scrollbar {
+            height: 4px;
+        }
+
+        pre::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        pre::-webkit-scrollbar-thumb {
+            background: var(--border2);
+            border-radius: 2px;
+        }
+
+        .pre-label {
+            position: absolute;
+            top: 10px;
+            right: 14px;
+            font-size: 10px;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0.5px;
+        }
+
+        .kw {
+            color: var(--code-kw);
+        }
+
+        .str {
+            color: var(--code-str);
+        }
+
+        .fn {
+            color: var(--code-fn);
+        }
+
+        .num {
+            color: var(--code-num);
+        }
+
+        .cmt {
+            color: var(--code-cmt);
+            font-style: italic;
+        }
+
+        .cls {
+            color: var(--code-cls);
+        }
+
+        .acc {
+            color: var(--accent);
+        }
+
+        .acc2 {
+            color: var(--accent2);
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            background: rgba(0, 229, 160, 0.08);
+            border: 1px solid rgba(0, 229, 160, 0.15);
+            border-radius: 4px;
+            padding: 1px 6px;
+            color: var(--accent);
+        }
+
+        /* ── Tables ─────────────────────────────── */
+        .table-wrap {
+            overflow-x: auto;
+            margin: 16px 0 24px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: var(--bg3);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            padding: 10px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        td {
+            padding: 10px 16px;
+            font-size: 13px;
+            color: var(--text);
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        td code {
+            font-size: 11.5px;
+        }
+
+        /* ── Info / Note boxes ──────────────────── */
+        .note {
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin: 16px 0 24px;
+            font-size: 13px;
+            line-height: 1.6;
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+        }
+
+        .note-icon {
+            font-size: 16px;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        .note.info {
+            background: rgba(0, 184, 255, 0.07);
+            border: 1px solid rgba(0, 184, 255, 0.2);
+            color: #8dd8f8;
+        }
+
+        .note.success {
+            background: rgba(0, 229, 160, 0.07);
+            border: 1px solid rgba(0, 229, 160, 0.2);
+            color: #6fefbf;
+        }
+
+        .note.warning {
+            background: rgba(255, 107, 53, 0.07);
+            border: 1px solid rgba(255, 107, 53, 0.2);
+            color: #f9a87a;
+        }
+
+        .note.purple {
+            background: rgba(168, 85, 247, 0.07);
+            border: 1px solid rgba(168, 85, 247, 0.2);
+            color: #c084fc;
+        }
+
+        /* ── Architecture diagram ───────────────── */
+        .arch-box {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px 28px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            line-height: 1.9;
+            overflow-x: auto;
+            margin: 16px 0 24px;
+        }
+
+        .arch-root {
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        .arch-branch {
+            color: var(--text-dim);
+        }
+
+        .arch-node {
+            color: var(--text-head);
+        }
+
+        .arch-sub {
+            color: var(--text-dim);
+            font-style: italic;
+        }
+
+        .arch-new {
+            color: var(--accent3);
+            font-size: 10px;
+            vertical-align: middle;
+            background: rgba(255, 107, 53, 0.15);
+            border: 1px solid rgba(255, 107, 53, 0.3);
+            border-radius: 3px;
+            padding: 0 4px;
+            margin-left: 4px;
+        }
+
+        /* ── Performance Bar ────────────────────── */
+        .perf-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin: 16px 0 24px;
+        }
+
+        .perf-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .perf-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-dim);
+            width: 220px;
+            flex-shrink: 0;
+        }
+
+        .perf-bar-wrap {
+            flex: 1;
+            background: var(--bg3);
+            border-radius: 100px;
+            height: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .perf-bar {
+            height: 100%;
+            border-radius: 100px;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+        }
+
+        .perf-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--accent);
+            width: 120px;
+            text-align: right;
+        }
+
+        /* ── Compare table ──────────────────────── */
+        .compare-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1px;
+            background: var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 16px 0 24px;
+            border: 1px solid var(--border);
+        }
+
+        .compare-col {
+            background: var(--bg2);
+            padding: 0;
+        }
+
+        .compare-head {
+            padding: 14px 18px;
+            font-family: 'Syne', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-head);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .compare-col.highlight .compare-head {
+            background: rgba(0, 229, 160, 0.08);
+            color: var(--accent);
+        }
+
+        .compare-row {
+            padding: 10px 18px;
+            font-size: 13px;
+            color: var(--text-dim);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .compare-col.highlight .compare-row {
+            color: var(--text);
+        }
+
+        .compare-row:last-child {
+            border-bottom: none;
+        }
+
+        .check-yes {
+            color: var(--accent);
+        }
+
+        .check-no {
+            color: #444;
+        }
+
+        .check-partial {
+            color: var(--accent3);
+        }
+
+        /* ── Feature chips ──────────────────────── */
+        .feature-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 16px 0 24px;
+        }
+
+        .feature-chip {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .feature-chip .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        /* ── Version table ──────────────────────── */
+        .version-table th:nth-child(5) {
+            color: var(--accent);
+        }
+
+        .version-table td:nth-child(5) {
+            color: var(--text-head);
+            font-weight: 500;
+        }
+
+        /* ── Record format ──────────────────────── */
+        .record-format {
+            display: flex;
+            gap: 0;
+            margin: 16px 0 24px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        .rec-field {
+            flex: 1;
+            padding: 14px 10px;
+            text-align: center;
+            border-right: 1px solid var(--border);
+            background: var(--bg2);
+        }
+
+        .rec-field:last-child {
+            border-right: none;
+        }
+
+        .rec-field:hover {
+            background: var(--bg3);
+        }
+
+        .rec-field-size {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+
+        .rec-field-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-head);
+            margin-bottom: 4px;
+        }
+
+        .rec-field-desc {
+            font-size: 10px;
+            color: var(--text-dim);
+            line-height: 1.4;
+        }
+
+        .rec-field.status {
+            background: rgba(0, 229, 160, 0.06);
+        }
+
+        .rec-field.txid {
+            background: rgba(0, 184, 255, 0.06);
+        }
+
+        .rec-field.data {
+            background: rgba(168, 85, 247, 0.06);
+            flex: 3;
+        }
+
+        .rec-field.crc {
+            background: rgba(255, 107, 53, 0.06);
+        }
+
+        /* ── Section separator ──────────────────── */
+        .sep {
+            height: 1px;
+            background: var(--border);
+            margin: 48px 0;
+        }
+
+        /* ── Responsive ─────────────────────────── */
+        @media (max-width: 900px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .main {
+                margin-left: 0;
+                padding: 32px 24px;
+            }
+
+            .why-grid,
+            .compare-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* ── Scroll animation ───────────────────── */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(16px);
+            transition: opacity 0.5s, transform 0.5s;
+        }
+
+        .fade-in.visible {
+            opacity: 1;
+            transform: none;
+        }
+
+        /* ── B+Tree visualization ───────────────── */
+        .btree-vis {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+            margin: 16px 0 24px;
+            overflow-x: auto;
+        }
+
+        .btree-level {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .btree-node {
+            border: 1px solid var(--border2);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            text-align: center;
+            min-width: 60px;
+            position: relative;
+        }
+
+        .btree-node.root {
+            background: rgba(0, 229, 160, 0.12);
+            border-color: rgba(0, 229, 160, 0.4);
+            color: var(--accent);
+        }
+
+        .btree-node.intern {
+            background: rgba(0, 184, 255, 0.08);
+            border-color: rgba(0, 184, 255, 0.3);
+            color: var(--accent2);
+        }
+
+        .btree-node.leaf {
+            background: rgba(168, 85, 247, 0.08);
+            border-color: rgba(168, 85, 247, 0.3);
+            color: var(--accent4);
+        }
+
+        .btree-node.active-leaf {
+            background: rgba(0, 229, 160, 0.15);
+            border-color: var(--accent);
+            color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(0, 229, 160, 0.2);
+        }
+
+        .btree-conn {
+            text-align: center;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .btree-label {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-align: center;
+            margin-top: 8px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .btree-arrow {
+            color: var(--accent);
+        }
+
+        .leaf-chain {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+
+        .leaf-link {
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- ═══════════════ SIDEBAR ═══════════════ -->
+    <aside class="sidebar">
+        <div class="sidebar-logo">
+            <div class="logo-name"><span>Ovn</span>DB</div>
+            <div class="logo-version">v4.0.0 · Stable</div>
+            <div class="logo-sub">NoSQL embedded · Pure TypeScript</div>
+        </div>
+        <nav>
+            <div class="nav-section">Pengenalan</div>
+            <a href="#intro" class="active"><span class="dot"></span>Apa itu OvnDB?</a>
+            <a href="#why"><span class="dot"></span>Kenapa OvnDB?</a>
+            <a href="#filosofi"><span class="dot"></span>Filosofi & Inspirasi</a>
+
+            <div class="nav-section">Arsitektur Inti</div>
+            <a href="#btree"><span class="dot"></span>B+ Tree — Kenapa?</a>
+            <a href="#storage"><span class="dot"></span>Storage Engine</a>
+            <a href="#wal"><span class="dot"></span>WAL & Crash Recovery</a>
+            <a href="#mvcc"><span class="dot"></span>MVCC & Transaksi</a>
+            <a href="#bloom"><span class="dot"></span>Bloom Filter</a>
+
+            <div class="nav-section">Cara Penggunaan</div>
+            <a href="#quickstart"><span class="dot"></span>Quick Start</a>
+            <a href="#crud"><span class="dot"></span>CRUD Operations</a>
+            <a href="#query"><span class="dot"></span>Query Operators</a>
+            <a href="#index"><span class="dot"></span>Index & Compound</a>
+            <a href="#fts"><span class="dot"></span>Full-text Search</a>
+            <a href="#aggregate"><span class="dot"></span>Aggregation Pipeline</a>
+            <a href="#transaction"><span class="dot"></span>Transaksi & Savepoint</a>
+            <a href="#schema"><span class="dot"></span>Schema Validation</a>
+            <a href="#crypto"><span class="dot"></span>Enkripsi AES-256</a>
+            <a href="#ttl"><span class="dot"></span>TTL Index</a>
+            <a href="#changestream"><span class="dot"></span>Change Stream (CDC)</a>
+            <a href="#relation"><span class="dot"></span>RelationManager</a>
+            <a href="#importexport"><span class="dot"></span>Import / Export</a>
+            <a href="#migration"><span class="dot"></span>Migration</a>
+            <a href="#observability"><span class="dot"></span>Observability</a>
+
+            <div class="nav-section">Referensi</div>
+            <a href="#record-format"><span class="dot"></span>Format Record On-disk</a>
+            <a href="#filestructure"><span class="dot"></span>Struktur File</a>
+            <a href="#security"><span class="dot"></span>Keamanan</a>
+            <a href="#performance"><span class="dot"></span>Performa</a>
+            <a href="#env"><span class="dot"></span>Environment Variables</a>
+        </nav>
+        <div class="sidebar-footer">MIT License · Node.js ≥ 18</div>
+    </aside>
+
+    <!-- ═══════════════ MAIN ═══════════════ -->
+    <main class="main">
+
+        <!-- ─── HERO ─── -->
+        <div class="hero" id="intro">
+            <div class="hero-badge">🇮🇩 Made in Indonesia · Zero Dependencies</div>
+            <h1>Ovn<span>DB</span><br />v4.0</h1>
+            <p class="hero-desc">
+                Database NoSQL embedded berkinerja tinggi untuk Node.js. API expressive berbasis dokumen JSON,
+                berjalan langsung di proses kamu tanpa server. Murni TypeScript. Zero dependency eksternal.
+            </p>
+            <div class="hero-tags">
+                <span class="tag tag-green">⚡ ~20K insertOne/s</span>
+                <span class="tag tag-blue">🔍 B+ Tree On-disk</span>
+                <span class="tag tag-orange">🔒 AES-256-GCM</span>
+                <span class="tag tag-purple">🧠 MVCC Snapshot Isolation</span>
+                <span class="tag tag-green">🌸 Bloom Filter</span>
+                <span class="tag tag-blue">📝 WAL Crash-safe</span>
+                <span class="tag tag-orange">🔎 Full-text Search</span>
+                <span class="tag tag-purple">💾 Multi-segment Storage</span>
+            </div>
+
+            <div class="note info">
+                <span class="note-icon">💡</span>
+                <div>
+                    <strong>Filosofi inti:</strong> Kekuatan embedded storage yang bekerja langsung di proses kamu,
+                    dipadukan dengan model dokumen JSON yang fleksibel dan query operator yang ekspresif — semuanya
+                    tanpa dependency eksternal.
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── WHY ─── -->
+        <section id="why">
+            <h2><span class="icon green">🎯</span>Kenapa OvnDB?</h2>
+            <p class="section-lead">
+                OvnDB dirancang untuk use case yang membutuhkan database powerful yang berjalan langsung
+                di proses aplikasi — tanpa overhead infrastruktur, tanpa dependency eksternal.
+            </p>
+
+            <div class="why-grid">
+                <div class="why-card">
+                    <div class="why-card-icon">🚀</div>
+                    <div class="why-card-title">Embedded — No Server</div>
+                    <div class="why-card-desc">Berjalan langsung di proses Node.js kamu. Tidak perlu install MongoDB,
+                        tidak perlu Docker, tidak perlu konfigurasi jaringan. Buka file, langsung query.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🍃</div>
+                    <div class="why-card-title">API MongoDB-Compatible</div>
+                    <div class="why-card-desc">Kalau kamu sudah familiar dengan MongoDB — <code>insertOne</code>,
+                        <code>find</code>, <code>updateOne</code>, <code>aggregate</code> — kamu langsung bisa pakai
+                        OvnDB tanpa belajar ulang.
+                    </div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">📈</div>
+                    <div class="why-card-title">Skala ke Triliunan Record</div>
+                    <div class="why-card-desc">Multi-segment storage (tiap segment max 512 MB, auto-expand). Tidak ada
+                        batas jumlah record — data disimpan di disk, bukan RAM.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🔐</div>
+                    <div class="why-card-title">Enkripsi Bawaan</div>
+                    <div class="why-card-desc">AES-256-GCM per-record dengan authenticated encryption. Tidak perlu
+                        library pihak ketiga. Cocok untuk data sensitif seperti PII, data kesehatan, dll.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🛡️</div>
+                    <div class="why-card-title">Crash-safe by Design</div>
+                    <div class="why-card-desc">Write-Ahead Log (WAL) dengan group commit — setiap write di-persist ke
+                        WAL sebelum ke storage. Kalau listrik mati, data tidak corrupt.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">0️⃣</div>
+                    <div class="why-card-title">Zero External Dependencies</div>
+                    <div class="why-card-desc">Tidak ada npm install yang bisa bermasalah. Tidak ada native bindings
+                        yang perlu di-compile. Tidak ada supply chain attack vector. Pure JavaScript.</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── FILOSOFI ─── -->
+        <section id="filosofi">
+            <h2><span class="icon blue">🧬</span>Filosofi & Inspirasi</h2>
+            <p class="section-lead">
+                OvnDB lahir dari dua dunia yang berbeda — keduanya menjadi fondasi desain, bukan saingan.
+                Setiap keputusan arsitektur di OvnDB bisa ditelusuri kembali ke inspirasi ini.
+            </p>
+
+            <div class="why-grid">
+                <div class="why-card" style="border-color: rgba(0,184,255,0.25);">
+                    <div class="why-card-icon">📦</div>
+                    <div class="why-card-title" style="color:var(--accent2)">Dari SQLite: Embedded & Local</div>
+                    <div class="why-card-desc">
+                        Filosofi "database sebagai file" — tidak ada daemon, tidak ada server, tidak ada koneksi
+                        jaringan.
+                        Cukup buka path, langsung kerja. Prinsip ini diterapkan di OvnDB:
+                        <code>OvnDB.open('./data')</code>
+                        adalah satu-satunya pintu masuk. Data tersimpan di disk lokal dalam format binary terstruktur
+                        dengan page-based storage, persis seperti paradigma embedded database.
+                    </div>
+                </div>
+                <div class="why-card" style="border-color: rgba(0,229,160,0.25);">
+                    <div class="why-card-icon">🍃</div>
+                    <div class="why-card-title" style="color:var(--accent)">Dari MongoDB: API & Model Dokumen</div>
+                    <div class="why-card-desc">
+                        Filosofi "schema-less, expressive query" — dokumen JSON fleksibel, query operator yang kaya
+                        (<code>$gte</code>, <code>$in</code>, <code>$elemMatch</code>…), aggregation pipeline berlapis,
+                        dan Change Stream. OvnDB mengadopsi keseluruhan model ini sehingga siapapun yang familiar
+                        dengan MongoDB bisa langsung produktif tanpa kurva belajar baru.
+                    </div>
+                </div>
+            </div>
+
+            <h3>Apa yang Dibangun di Atas Keduanya</h3>
+            <p>
+                OvnDB bukan sekadar menggabungkan — ia menambahkan lapisan yang tidak dimiliki keduanya secara bawaan:
+            </p>
+
+            <div class="why-grid">
+                <div class="why-card">
+                    <div class="why-card-icon">🔒</div>
+                    <div class="why-card-title">AES-256-GCM Per-record</div>
+                    <div class="why-card-desc">Enkripsi authenticated di level record, bukan level file. Field-level
+                        encryption tersedia untuk granularitas lebih dalam.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🌸</div>
+                    <div class="why-card-title">Bloom Filter per-Segment</div>
+                    <div class="why-card-desc">Probabilistic skip — sebelum menyentuh disk, filter dulu. Hemat hingga
+                        80%+ disk I/O untuk miss queries pada dataset besar.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🔀</div>
+                    <div class="why-card-title">MVCC Snapshot Isolation</div>
+                    <div class="why-card-desc">Reader tidak pernah diblokir writer. Rollback O(1) — cukup tandai txId
+                        sebagai ABORTED tanpa undo ke disk.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🔎</div>
+                    <div class="why-card-title">Full-text Search Bawaan</div>
+                    <div class="why-card-desc">Inverted index per-field, persisted sebagai JSON. Tidak butuh
+                        Elasticsearch atau plugin tambahan.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🛡️</div>
+                    <div class="why-card-title">Security by Default</div>
+                    <div class="why-card-desc">Prototype pollution guard, ReDoS protection, path traversal prevention,
+                        CSPRNG ID — semuanya aktif tanpa konfigurasi tambahan.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">0️⃣</div>
+                    <div class="why-card-title">Zero External Dependency</div>
+                    <div class="why-card-desc">Tidak ada npm package pihak ketiga. Tidak ada native binding. Tidak ada
+                        supply chain risk. Pure TypeScript dari awal sampai akhir.</div>
+                </div>
+            </div>
+
+            <div class="note success">
+                <span class="note-icon">💡</span>
+                <div>
+                    <strong>Prinsip desain OvnDB:</strong> ambil yang terbaik dari masing-masing inspirasi, hilangkan
+                    kelemahan masing-masing, tambahkan fitur yang keduanya tidak miliki secara bawaan — semuanya dalam
+                    satu library tanpa dependency.
+                </div>
+            </div>
+        </section>
+
+        <div class="sep"></div>
+
+        <!-- ─── BTREE ─── -->
+        <section id="btree">
+            <h2><span class="icon green">🌳</span>B+ Tree — Kenapa Dipilih?</h2>
+            <p class="section-lead">
+                OvnDB menggunakan <strong>On-disk Paged B+ Tree</strong> untuk primary index dan secondary index.
+                Ini adalah pilihan teknis yang disengaja dengan alasan kuat.
+            </p>
+
+            <h3>Apa itu B+ Tree?</h3>
+            <p>
+                B+ Tree adalah struktur data tree yang self-balancing. Semua data tersimpan di leaf nodes
+                yang saling terhubung sebagai linked list. Internal nodes hanya menyimpan keys sebagai
+                "router" untuk navigasi. Ini berbeda dari B-Tree biasa di mana data bisa ada di internal nodes.
+            </p>
+
+            <!-- Visual B+ Tree -->
+            <div class="btree-vis">
+                <div class="btree-label">Struktur B+ Tree OvnDB (T=128, MAX_KEYS=255)</div>
+                <br />
+                <div class="btree-level">
+                    <div class="btree-node root">Root Node<br /><small>Internal</small></div>
+                </div>
+                <div class="btree-conn">┌──────────────┬──────────────┐</div>
+                <div class="btree-level">
+                    <div class="btree-node intern">Internal #1</div>
+                    <div class="btree-node intern">Internal #2</div>
+                    <div class="btree-node intern">Internal #3</div>
+                </div>
+                <div class="btree-conn">┌──┬──┐ ┌──┬──┐ ┌──┬──┐</div>
+                <div class="btree-level">
+                    <div class="btree-node leaf">Leaf</div>
+                    <div class="btree-node leaf">Leaf</div>
+                    <div class="btree-node active-leaf">Leaf ← search</div>
+                    <div class="btree-node leaf">Leaf</div>
+                    <div class="btree-node leaf">Leaf</div>
+                </div>
+                <br />
+                <div class="leaf-chain">
+                    <span class="btree-node leaf" style="font-size:10px">L1</span>
+                    <span class="leaf-link"><span class="btree-arrow">⟶</span></span>
+                    <span class="btree-node leaf" style="font-size:10px">L2</span>
+                    <span class="leaf-link"><span class="btree-arrow">⟶</span></span>
+                    <span class="btree-node active-leaf" style="font-size:10px">L3</span>
+                    <span class="leaf-link"><span class="btree-arrow">⟶</span></span>
+                    <span class="btree-node leaf" style="font-size:10px">L4</span>
+                    <span class="leaf-link"><span class="btree-arrow">⟶</span></span>
+                    <span class="btree-node leaf" style="font-size:10px">L5</span>
+                </div>
+                <div class="btree-label" style="margin-top:12px">Leaf nodes saling terhubung → Range scan efisien O(log
+                    N + K)</div>
+            </div>
+
+            <h3>Alasan Memilih B+ Tree</h3>
+
+            <div class="why-grid">
+                <div class="why-card">
+                    <div class="why-card-icon">🏃</div>
+                    <div class="why-card-title">O(log N) untuk Semua Operasi</div>
+                    <div class="why-card-desc">Insert, delete, get — semua O(log N). Dengan T=128 (max 255 keys per
+                        node), tree dengan 1 juta record hanya memiliki ~3-4 level. Traversal sangat cepat.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">📊</div>
+                    <div class="why-card-title">Range Query Sangat Efisien</div>
+                    <div class="why-card-desc">Leaf nodes terhubung sebagai doubly-linked list. Range query
+                        (<code>$gte</code>, <code>$lte</code>) cukup cari leaf pertama lalu scan ke kanan — tidak perlu
+                        backtrack ke atas.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">💾</div>
+                    <div class="why-card-title">On-disk dengan Buffer Pool</div>
+                    <div class="why-card-desc">Pages di-cache di RAM (256 MB buffer pool LRU). Hanya pages yang
+                        diperlukan yang di-load ke memori. Tree bisa jauh lebih besar dari RAM yang tersedia.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🔢</div>
+                    <div class="why-card-title">Ordered — Cursor Pagination</div>
+                    <div class="why-card-desc">Data selalu terurut. Cursor pagination (<code>after</code>) jauh lebih
+                        efisien dari <code>skip</code> karena langsung jump ke posisi di tree, bukan scan dari awal.
+                    </div>
+                </div>
+            </div>
+
+            <h3>Implementasi di OvnDB</h3>
+            <p>Lihat file <code>src/core/index/btree-paged.ts</code>. Parameter kunci:</p>
+
+            <pre><span class="cmt">// src/core/index/btree-paged.ts</span>
+<span class="kw">const</span> T        = <span class="num">128</span>;          <span class="cmt">// minimum degree</span>
+<span class="kw">const</span> MAX_KEYS = <span class="num">2</span> * T - <span class="num">1</span>;  <span class="cmt">// = 255 keys per node</span>
+
+<span class="cmt">// Tiap pointer ke record menyimpan:</span>
+<span class="cmt">// segmentId (4B) + offset (8B) + totalSize (4B) + dataSize (4B) + txId (8B)</span>
+<span class="kw">const</span> POINTER_SIZE = <span class="num">4 + 8 + 4 + 4 + 8</span>;  <span class="cmt">// = 28 bytes</span>
+<div class="pre-label">btree-paged.ts</div></pre>
+
+            <div class="note info">
+                <span class="note-icon">🔬</span>
+                <div>
+                    <strong>Kenapa bukan Hash Map?</strong> Hash map lebih cepat untuk point lookup (O(1)) tapi tidak
+                    bisa range query (<code>$gte</code>, <code>$lte</code>, <code>sort</code>). B+ Tree mendukung semua
+                    query patterns yang dibutuhkan database dokumentasi.
+                </div>
+            </div>
+
+            <div class="note info">
+                <span class="note-icon">🔬</span>
+                <div>
+                    <strong>Kenapa bukan LSM Tree (seperti LevelDB/RocksDB)?</strong> LSM Tree lebih cepat untuk
+                    write-heavy workload tapi lebih kompleks — butuh compaction background yang bisa menyebabkan write
+                    stalls. B+ Tree memberikan performa yang lebih predictable untuk mixed read/write.
+                </div>
+            </div>
+
+            <h3>Cursor Pagination dengan B+ Tree</h3>
+            <pre><span class="cmt">// Lebih efisien dari skip — langsung jump ke posisi di tree</span>
+<span class="kw">const</span> page1 = <span class="kw">await</span> col.<span class="fn">find</span>({}, { limit: <span class="num">20</span>, sort: { _id: <span class="num">1</span> } });
+<span class="kw">const</span> page2 = <span class="kw">await</span> col.<span class="fn">find</span>({}, {
+  limit: <span class="num">20</span>,
+  sort: { _id: <span class="num">1</span> },
+  after: page1.<span class="fn">at</span>(-<span class="num">1</span>)?._id  <span class="cmt">// cursor dari item terakhir page sebelumnya</span>
+});<div class="pre-label">cursor-pagination.ts</div></pre>
+        </section>
+
+        <!-- ─── STORAGE ─── -->
+        <section id="storage">
+            <h2><span class="icon blue">💽</span>Storage Engine</h2>
+            <p class="section-lead">
+                OvnDB menggunakan multi-segment storage — data collection disimpan di beberapa file segment,
+                masing-masing maksimal 512 MB.
+            </p>
+
+            <h3>Arsitektur Storage</h3>
+            <div class="arch-box">
+                <div><span class="arch-root">StorageEngine</span></div>
+                <div><span class="arch-branch">├──</span> <span class="arch-node">SegmentManager</span> <span
+                        class="arch-sub">← petabyte-scale multi-file storage</span></div>
+                <div><span class="arch-branch">│ ├──</span> <span class="arch-node">BloomFilter</span> <span
+                        class="arch-new">v4.0</span> <span class="arch-sub">← per-segment, FNV-1a double-hash, 1%
+                        FPR</span></div>
+                <div><span class="arch-branch">│ └──</span> <span class="arch-node">.seg-0000.ovn</span>, <span
+                        class="arch-node">.seg-0001.ovn</span> ...</div>
+                <div><span class="arch-branch">├──</span> <span class="arch-node">PagedBPlusTree</span> <span
+                        class="arch-sub">← on-disk index, 256 MB buffer pool</span></div>
+                <div><span class="arch-branch">│ └──</span> <span class="arch-node">PageManager</span> <span
+                        class="arch-sub">← LRU buffer pool → disk</span></div>
+                <div><span class="arch-branch">├──</span> <span class="arch-node">WAL</span> (group commit) <span
+                        class="arch-sub">← crash recovery, auto-rotate 256 MB</span></div>
+                <div><span class="arch-branch">├──</span> <span class="arch-node">LRUCache&lt;string, Buffer&gt;</span>
+                    <span class="arch-sub">← byte-aware doc cache, 256 MB default</span>
+                </div>
+                <div><span class="arch-branch">└──</span> <span class="arch-node">MVCCManager</span> <span
+                        class="arch-sub">← Snapshot Isolation + Savepoints</span></div>
+            </div>
+
+            <h3>Multi-Segment Storage</h3>
+            <p>Setiap collection memiliki beberapa segment file. Ketika segment mencapai 512 MB, segment baru dibuat
+                otomatis. Ini memungkinkan collection tidak terbatas ukurannya.</p>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Aspek</th>
+                            <th>Detail</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Max ukuran per segment</td>
+                            <td><code>512 MB</code> (konfigurabel)</td>
+                        </tr>
+                        <tr>
+                            <td>Jumlah segment</td>
+                            <td>Tidak terbatas — auto-expand</td>
+                        </tr>
+                        <tr>
+                            <td>Format header segment</td>
+                            <td>4 bytes magic <code>OVN\x01</code></td>
+                        </tr>
+                        <tr>
+                            <td>Compaction</td>
+                            <td>Background compaction dengan rasio threshold 60%</td>
+                        </tr>
+                        <tr>
+                            <td>Parallel compaction</td>
+                            <td>Segment-level concurrency</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>LRU Cache — Byte-Aware</h3>
+            <p>Cache diukur dalam bytes, bukan jumlah entry. Default 256 MB. Ini lebih akurat karena dokumen bisa punya
+                ukuran yang sangat berbeda.</p>
+
+            <pre><span class="kw">const</span> db = <span class="kw">await</span> <span class="cls">OvnDB</span>.<span class="fn">open</span>(<span class="str">'./data'</span>, {
+  cacheBytes: <span class="num">512</span> * <span class="num">1024</span> * <span class="num">1024</span>,  <span class="cmt">// 512 MB cache</span>
+  fileLock:   <span class="kw">true</span>,                <span class="cmt">// cegah multi-process corruption</span>
+  mkdirp:     <span class="kw">true</span>,                <span class="cmt">// auto-create directory</span>
+  gracefulShutdown: <span class="kw">true</span>,          <span class="cmt">// auto-close pada SIGTERM/SIGINT</span>
+});<div class="pre-label">storage-config.ts</div></pre>
+        </section>
+
+        <!-- ─── WAL ─── -->
+        <section id="wal">
+            <h2><span class="icon orange">📝</span>WAL & Crash Recovery</h2>
+            <p class="section-lead">
+                Write-Ahead Log (WAL) memastikan data tidak pernah corrupt meskipun proses crash di tengah operasi.
+            </p>
+
+            <h3>Bagaimana WAL Bekerja</h3>
+            <p>Setiap write <strong>pertama</strong> ditulis ke WAL file (<code>.wal</code>), baru kemudian ke segment
+                storage. Saat crash, WAL di-replay ulang untuk memulihkan state terakhir.</p>
+
+            <div class="why-grid">
+                <div class="why-card">
+                    <div class="why-card-icon">⚡</div>
+                    <div class="why-card-title">Group Commit</div>
+                    <div class="why-card-desc">Bukan 1 fsync per operasi (seperti v1). WAL mengumpulkan batch operasi
+                        dalam window waktu pendek (~1ms) lalu 1 fdatasync untuk semua. ~10× throughput lebih tinggi.
+                    </div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🔄</div>
+                    <div class="why-card-title">Auto-rotation</div>
+                    <div class="why-card-desc">WAL file di-rotate ketika mencapai 256 MB. File lama di-rename ke
+                        <code>.wal.bak</code>, file baru dibuat. Crash-safe via atomic rename
+                        (<code>.wal.new → .wal</code>).
+                    </div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🛑</div>
+                    <div class="why-card-title">TX_ABORT Tracking</div>
+                    <div class="why-card-desc">WAL melacak operasi yang di-abort. Saat replay, operasi dari transaksi
+                        yang di-abort TIDAK di-replay. Fix bug corruption yang ada di v2.x.</div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">✅</div>
+                    <div class="why-card-title">CRC32 Checksum</div>
+                    <div class="why-card-desc">Setiap entry WAL punya CRC32 checksum. Saat replay, entry yang corrupt
+                        (partial write karena crash) dideteksi dan di-skip.</div>
+                </div>
+            </div>
+
+            <div class="note warning">
+                <span class="note-icon">⚠️</span>
+                <div>WAL otomatis dibersihkan setelah <code>flush()</code> berhasil. WAL file kecil berarti database
+                    sering di-checkpoint — itu tanda yang baik.</div>
+            </div>
+        </section>
+
+        <!-- ─── MVCC ─── -->
+        <section id="mvcc">
+            <h2><span class="icon purple">🔀</span>MVCC & Transaksi</h2>
+            <p class="section-lead">
+                Multi-Version Concurrency Control (MVCC) memastikan reader tidak pernah diblokir oleh writer, dan writer
+                tidak diblokir oleh reader.
+            </p>
+
+            <h3>Bagaimana MVCC Bekerja di OvnDB</h3>
+            <pre><span class="cmt">// Setiap record di-tag dengan txId (BigInt monotonically increasing)</span>
+<span class="cmt">// Saat read, hanya record dengan txId yang "visible" di snapshot yang dikembalikan</span>
+
+<span class="cmt">// Snapshot diambil saat BEGIN, bukan saat operasi pertama</span>
+<span class="cmt">// Ini adalah Snapshot Isolation</span>
+
+<span class="cmt">// Rollback: cukup tandai txId sebagai ABORTED</span>
+<span class="cmt">// Tidak ada undo write ke disk — sangat cepat</span><div class="pre-label">mvcc-concept.ts</div></pre>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Aspek</th>
+                            <th>v1 (Compensating Writes)</th>
+                            <th>v2+ (MVCC)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Isolation Level</td>
+                            <td>None (dirty reads possible)</td>
+                            <td>Snapshot Isolation</td>
+                        </tr>
+                        <tr>
+                            <td>Rollback</td>
+                            <td>Undo write per operasi (lambat, bisa gagal)</td>
+                            <td>Tandai txId ABORTED (O(1))</td>
+                        </tr>
+                        <tr>
+                            <td>Reader blocked?</td>
+                            <td>Ya</td>
+                            <td>Tidak</td>
+                        </tr>
+                        <tr>
+                            <td>Write Conflict</td>
+                            <td>Last write wins (data loss)</td>
+                            <td>WriteConflictError di commit</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>Savepoints (v4.0)</h3>
+            <p>Rollback parsial tanpa membatalkan seluruh transaksi.</p>
+
+            <pre><span class="kw">const</span> tx = db.<span class="fn">beginTransaction</span>();
+
+tx.<span class="fn">insert</span>(col, { _id: <span class="str">'a'</span>, balance: <span class="num">100</span> });
+tx.<span class="fn">insert</span>(col, { _id: <span class="str">'b'</span>, balance: <span class="num">200</span> });
+
+<span class="cmt">// Buat savepoint sebelum operasi berisiko</span>
+tx.<span class="fn">savepoint</span>(<span class="str">'before-risky'</span>);
+
+tx.<span class="fn">insert</span>(col, { _id: <span class="str">'c'</span>, balance: <span class="num">999</span> });  <span class="cmt">// operasi berisiko</span>
+
+<span class="cmt">// Rollback hanya sampai savepoint — 'a' dan 'b' tetap</span>
+<span class="kw">await</span> tx.<span class="fn">rollbackTo</span>(<span class="str">'before-risky'</span>);
+
+<span class="cmt">// Commit — hanya 'a' dan 'b' yang masuk</span>
+<span class="kw">await</span> tx.<span class="fn">commit</span>();<div class="pre-label">savepoints.ts</div></pre>
+        </section>
+
+        <!-- ─── BLOOM FILTER ─── -->
+        <section id="bloom">
+            <h2><span class="icon green">🌸</span>Bloom Filter (v4.0)</h2>
+            <p class="section-lead">
+                Probabilistic data structure yang digunakan untuk skip disk I/O ketika key pasti tidak ada di suatu
+                segment.
+                Menghemat hingga 80%+ disk reads untuk miss queries pada dataset besar.
+            </p>
+
+            <div class="why-grid">
+                <div class="why-card">
+                    <div class="why-card-icon">🎯</div>
+                    <div class="why-card-title">False Positive Rate ~1%</div>
+                    <div class="why-card-desc">Bloom filter mungkin bilang "ada" padahal tidak (false positive), tapi
+                        tidak pernah bilang "tidak ada" padahal ada (false negative). Safe untuk skip optimization.
+                    </div>
+                </div>
+                <div class="why-card">
+                    <div class="why-card-icon">🔢</div>
+                    <div class="why-card-title">7 Hash Functions (k=7)</div>
+                    <div class="why-card-desc">Jumlah hash functions optimal untuk FPR ~1%. Implementasi FNV-1a dengan
+                        double hashing — fast, no crypto overhead.</div>
+                </div>
+            </div>
+
+            <pre><span class="cmt">// Cara kerja Bloom Filter di OvnDB:</span>
+<span class="cmt">// 1. Saat insert record ke segment, key di-add ke bloom filter segment itu</span>
+<span class="cmt">// 2. Saat findOne(key), cek bloom filter SEBELUM B+ Tree lookup</span>
+<span class="cmt">// 3. Jika bloom filter bilang "pasti tidak ada" → skip segment ini, coba segment lain</span>
+<span class="cmt">// 4. Jika "mungkin ada" → baru lakukan B+ Tree disk lookup</span>
+
+<span class="kw">const</span> bf = <span class="kw">new</span> <span class="cls">BloomFilter</span>(<span class="num">10_000</span>);  <span class="cmt">// expected 10K items, FPR ~1%</span>
+bf.<span class="fn">add</span>(<span class="str">'user:u1'</span>);
+bf.<span class="fn">test</span>(<span class="str">'user:u1'</span>);   <span class="cmt">// true  — mungkin ada → perlu B+ Tree check</span>
+bf.<span class="fn">test</span>(<span class="str">'user:u9'</span>);   <span class="cmt">// false — pasti tidak ada → skip disk I/O ✓</span><div class="pre-label">bloom-filter.ts</div></pre>
+        </section>
+
+        <div class="sep"></div>
+
+        <!-- ─── QUICKSTART ─── -->
+        <section id="quickstart">
+            <h2><span class="icon green">🚀</span>Quick Start</h2>
+
+            <pre><span class="cmt">// Install</span>
+npm install ovndb
+</pre>
+
+            <pre><span class="kw">import</span> { <span class="cls">OvnDB</span> } <span class="kw">from</span> <span class="str">'ovndb'</span>;
+
+<span class="cmt">// 1. Buka database (auto-create direktori)</span>
+<span class="kw">const</span> db    = <span class="kw">await</span> <span class="cls">OvnDB</span>.<span class="fn">open</span>(<span class="str">'./data'</span>);
+<span class="kw">const</span> users = <span class="kw">await</span> db.<span class="fn">collection</span>&lt;<span class="cls">User</span>&gt;(<span class="str">'users'</span>);
+
+<span class="cmt">// 2. Insert</span>
+<span class="kw">const</span> user = <span class="kw">await</span> users.<span class="fn">insertOne</span>({ name: <span class="str">'Budi'</span>, phone: <span class="str">'628123'</span>, points: <span class="num">0</span> });
+<span class="cmt">// → { _id: 'abc123...', name: 'Budi', phone: '628123', points: 0 }</span>
+
+<span class="cmt">// 3. Find</span>
+<span class="kw">const</span> vips = <span class="kw">await</span> users.<span class="fn">find</span>(
+  { points: { <span class="acc">$gte</span>: <span class="num">1000</span> } },
+  { sort: { points: -<span class="num">1</span> }, limit: <span class="num">10</span> }
+);
+
+<span class="cmt">// 4. Update</span>
+<span class="kw">await</span> users.<span class="fn">updateOne</span>({ _id: user._id }, { <span class="acc">$inc</span>: { points: <span class="num">50</span> } });
+
+<span class="cmt">// 5. Delete</span>
+<span class="kw">await</span> users.<span class="fn">deleteOne</span>({ _id: user._id });
+
+<span class="cmt">// 6. Tutup</span>
+<span class="kw">await</span> db.<span class="fn">close</span>();<div class="pre-label">basic-usage.ts</div></pre>
+        </section>
+
+        <!-- ─── CRUD ─── -->
+        <section id="crud">
+            <h2><span class="icon blue">📋</span>CRUD Operations</h2>
+
+            <h3>Insert</h3>
+            <pre><span class="cmt">// Insert satu dokumen (_id auto-generate pakai CSPRNG)</span>
+<span class="kw">const</span> doc  = <span class="kw">await</span> col.<span class="fn">insertOne</span>({ name: <span class="str">'Budi'</span>, points: <span class="num">0</span> });
+
+<span class="cmt">// Insert dengan custom _id</span>
+<span class="kw">const</span> doc  = <span class="kw">await</span> col.<span class="fn">insertOne</span>({ _id: <span class="str">'u1'</span>, name: <span class="str">'Siti'</span> });
+
+<span class="cmt">// Insert banyak sekaligus</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">insertMany</span>([{ name: <span class="str">'A'</span> }, { name: <span class="str">'B'</span> }, { name: <span class="str">'C'</span> }]);<div class="pre-label">insert.ts</div></pre>
+
+            <h3>Find / Query</h3>
+            <pre><span class="cmt">// Find by _id (paling cepat — langsung B+ Tree lookup)</span>
+<span class="kw">const</span> doc  = <span class="kw">await</span> col.<span class="fn">findOne</span>({ _id: <span class="str">'u1'</span> });
+<span class="kw">const</span> doc  = <span class="kw">await</span> col.<span class="fn">findById</span>(<span class="str">'u1'</span>);                    <span class="cmt">// shorthand</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">findManyById</span>([<span class="str">'u1'</span>, <span class="str">'u2'</span>, <span class="str">'u3'</span>]);    <span class="cmt">// batch</span>
+
+<span class="cmt">// Filter dengan comparison operators</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>({ points: { <span class="acc">$gte</span>: <span class="num">100</span>, <span class="acc">$lte</span>: <span class="num">500</span> } });
+
+<span class="cmt">// Logical operators</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>({ <span class="acc">$or</span>: [{ city: <span class="str">'Jakarta'</span> }, { active: <span class="kw">true</span> }] });
+
+<span class="cmt">// Array operators</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>({ tags: { <span class="acc">$in</span>: [<span class="str">'nodejs'</span>, <span class="str">'typescript'</span>] } });
+
+<span class="cmt">// Regex</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>({ name: { <span class="acc">$regex</span>: <span class="str">/^Budi/i</span> } });
+
+<span class="cmt">// Sort + Limit + Projection</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>(
+  { city: <span class="str">'Jakarta'</span> },
+  { sort: { points: -<span class="num">1</span> }, limit: <span class="num">20</span>, projection: { name: <span class="num">1</span>, points: <span class="num">1</span> } }
+);<div class="pre-label">find.ts</div></pre>
+
+            <h3>Update</h3>
+            <pre><span class="cmt">// Operator $inc — increment angka</span>
+<span class="kw">await</span> col.<span class="fn">updateOne</span>({ _id: <span class="str">'u1'</span> }, { <span class="acc">$inc</span>: { points: <span class="num">50</span> } });
+
+<span class="cmt">// Operator $set — ubah field</span>
+<span class="kw">await</span> col.<span class="fn">updateOne</span>({ _id: <span class="str">'u1'</span> }, { <span class="acc">$set</span>: { name: <span class="str">'Nama Baru'</span>, active: <span class="kw">true</span> } });
+
+<span class="cmt">// Operator $push — append ke array</span>
+<span class="kw">await</span> col.<span class="fn">updateOne</span>({ _id: <span class="str">'u1'</span> }, { <span class="acc">$push</span>: { tags: <span class="str">'nodejs'</span> } });
+
+<span class="cmt">// Update banyak dokumen sekaligus</span>
+<span class="kw">await</span> col.<span class="fn">updateMany</span>({ active: <span class="kw">false</span> }, { <span class="acc">$set</span>: { active: <span class="kw">true</span> } });
+
+<span class="cmt">// Upsert — insert kalau tidak ada, update kalau ada</span>
+<span class="kw">const</span> doc = <span class="kw">await</span> col.<span class="fn">upsertOne</span>({ _id: <span class="str">'u1'</span> }, { <span class="acc">$set</span>: { name: <span class="str">'Budi'</span> } });
+
+<span class="cmt">// findOneAndUpdate — kembalikan dokumen setelah update</span>
+<span class="kw">const</span> doc = <span class="kw">await</span> col.<span class="fn">findOneAndUpdate</span>({ _id: <span class="str">'u1'</span> }, { <span class="acc">$inc</span>: { points: <span class="num">1</span> } });<div class="pre-label">update.ts</div></pre>
+
+            <h3>Delete & BulkWrite</h3>
+            <pre><span class="kw">await</span> col.<span class="fn">deleteOne</span>({ _id: <span class="str">'u1'</span> });
+<span class="kw">await</span> col.<span class="fn">deleteMany</span>({ active: <span class="kw">false</span> });
+<span class="kw">const</span> doc = <span class="kw">await</span> col.<span class="fn">findOneAndDelete</span>({ _id: <span class="str">'u1'</span> });
+
+<span class="cmt">// BulkWrite — campuran operasi dalam satu panggilan</span>
+<span class="kw">const</span> result = <span class="kw">await</span> col.<span class="fn">bulkWrite</span>([
+  { op: <span class="str">'insertOne'</span>,  doc: { _id: <span class="str">'u1'</span>, name: <span class="str">'Alice'</span> } },
+  { op: <span class="str">'updateOne'</span>,  filter: { _id: <span class="str">'u1'</span> }, spec: { <span class="acc">$set</span>: { verified: <span class="kw">true</span> } } },
+  { op: <span class="str">'deleteOne'</span>,  filter: { _id: <span class="str">'u2'</span> } },
+]);
+<span class="cmt">// result = { ops: 3, insertedCount: 1, updatedCount: 1, deletedCount: 1, errors: [] }</span><div class="pre-label">delete-bulk.ts</div></pre>
+        </section>
+
+        <!-- ─── QUERY OPERATORS ─── -->
+        <section id="query">
+            <h2><span class="icon orange">🔍</span>Query Operators</h2>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Operator</th>
+                            <th>Deskripsi</th>
+                            <th>Contoh</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>$eq</code> <code>$ne</code></td>
+                            <td>Equal / Not equal</td>
+                            <td><code>{ age: { $eq: 25 } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$gt</code> <code>$gte</code> <code>$lt</code> <code>$lte</code></td>
+                            <td>Comparison</td>
+                            <td><code>{ points: { $gte: 100 } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$in</code> <code>$nin</code></td>
+                            <td>In / Not in array</td>
+                            <td><code>{ city: { $in: ['Jakarta','Bandung'] } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$exists</code></td>
+                            <td>Field exists check</td>
+                            <td><code>{ email: { $exists: true } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$regex</code></td>
+                            <td>Regular expression (ReDoS-protected)</td>
+                            <td><code>{ name: { $regex: /^Budi/ } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$and</code> <code>$or</code> <code>$nor</code> <code>$not</code></td>
+                            <td>Logical operators</td>
+                            <td><code>{ $or: [{ a: 1 }, { b: 2 }] }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$size</code></td>
+                            <td>Array length</td>
+                            <td><code>{ tags: { $size: 3 } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$all</code></td>
+                            <td>Array contains semua</td>
+                            <td><code>{ tags: { $all: ['a','b'] } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$elemMatch</code></td>
+                            <td>Array element match</td>
+                            <td><code>{ scores: { $elemMatch: { $gt: 90 } } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$type</code></td>
+                            <td>Type checking</td>
+                            <td><code>{ age: { $type: 'number' } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$mod</code></td>
+                            <td>Modulo operation</td>
+                            <td><code>{ id: { $mod: [2, 0] } }</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>$text</code> <span style="color:var(--accent3)">v4.0</span></td>
+                            <td>Full-text search</td>
+                            <td><code>{ $text: 'budi jakarta' }</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>Update Operators</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Operator</th>
+                            <th>Deskripsi</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>$set</code> <code>$unset</code></td>
+                            <td>Set / hapus field</td>
+                        </tr>
+                        <tr>
+                            <td><code>$inc</code></td>
+                            <td>Increment angka</td>
+                        </tr>
+                        <tr>
+                            <td><code>$mul</code></td>
+                            <td>Multiply angka</td>
+                        </tr>
+                        <tr>
+                            <td><code>$min</code> <code>$max</code></td>
+                            <td>Set jika lebih kecil/besar</td>
+                        </tr>
+                        <tr>
+                            <td><code>$push</code></td>
+                            <td>Append ke array (+ <code>$each</code> <code>$sort</code> <code>$slice</code>)</td>
+                        </tr>
+                        <tr>
+                            <td><code>$pull</code></td>
+                            <td>Hapus dari array</td>
+                        </tr>
+                        <tr>
+                            <td><code>$addToSet</code></td>
+                            <td>Tambah jika belum ada</td>
+                        </tr>
+                        <tr>
+                            <td><code>$rename</code></td>
+                            <td>Rename field</td>
+                        </tr>
+                        <tr>
+                            <td><code>$setOnInsert</code></td>
+                            <td>Set hanya saat insert (upsert)</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ─── INDEX ─── -->
+        <section id="index">
+            <h2><span class="icon purple">🗂️</span>Index & Compound Index</h2>
+            <p class="section-lead">Index mempercepat query dari O(N) full scan menjadi O(log N) B+ Tree lookup.</p>
+
+            <h3>Single-field Index</h3>
+            <pre><span class="cmt">// Unique index — enforces uniqueness</span>
+<span class="kw">await</span> col.<span class="fn">createIndex</span>({ field: <span class="str">'email'</span>, unique: <span class="kw">true</span> });
+
+<span class="cmt">// Non-unique index</span>
+<span class="kw">await</span> col.<span class="fn">createIndex</span>({ field: <span class="str">'city'</span>, unique: <span class="kw">false</span> });
+
+<span class="cmt">// Sparse index — skip dokumen yang tidak punya field</span>
+<span class="kw">await</span> col.<span class="fn">createIndex</span>({ field: <span class="str">'city'</span>, unique: <span class="kw">false</span>, sparse: <span class="kw">true</span> });
+
+<span class="cmt">// Partial index — hanya index dokumen yang memenuhi filter</span>
+<span class="kw">await</span> col.<span class="fn">createIndex</span>({ field: <span class="str">'score'</span>, unique: <span class="kw">false</span>, partial: { active: <span class="kw">true</span> } });<div class="pre-label">index.ts</div></pre>
+
+            <h3>Compound Index (v4.0)</h3>
+            <p>Index multi-field untuk query yang sering menggunakan kombinasi kondisi. Key compound diserialisasi
+                sebagai <code>val1\x00val2</code> (NUL separator).</p>
+
+            <pre><span class="cmt">// Compound index pada ['city', 'active']</span>
+<span class="kw">await</span> col.<span class="fn">createIndex</span>({ field: [<span class="str">'city'</span>, <span class="str">'active'</span>], unique: <span class="kw">false</span> });
+
+<span class="cmt">// Compound unique index</span>
+<span class="kw">await</span> col.<span class="fn">createIndex</span>({ field: [<span class="str">'name'</span>, <span class="str">'role'</span>], unique: <span class="kw">true</span> });
+
+<span class="cmt">// Query ini akan otomatis pakai compound index:</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>({ city: <span class="str">'Jakarta'</span>, active: <span class="kw">true</span> });
+<span class="cmt">// Tanpa index → O(N) full scan</span>
+<span class="cmt">// Dengan compound index → O(log N) B+ Tree lookup ✓</span><div class="pre-label">compound-index.ts</div></pre>
+
+            <h3>Query Plan Explain</h3>
+            <pre><span class="cmt">// Lihat query plan tanpa eksekusi</span>
+<span class="kw">const</span> plan = col.<span class="fn">explain</span>({ city: <span class="str">'Jakarta'</span>, active: <span class="kw">true</span> });
+<span class="cmt">// → { strategy: 'COMPOUND_INDEX', index: ['city','active'], estimatedCost: ... }</span><div class="pre-label">explain.ts</div></pre>
+        </section>
+
+        <!-- ─── FTS ─── -->
+        <section id="fts">
+            <h2><span class="icon green">🔎</span>Full-text Search (v4.0)</h2>
+            <p class="section-lead">
+                Inverted index per-field — seperti search engine mini langsung di database kamu.
+                Index disimpan sebagai JSON file (<code>.fts.{field}.json</code>).
+            </p>
+
+            <pre><span class="cmt">// Buat text index pada field</span>
+<span class="kw">await</span> col.<span class="fn">createTextIndex</span>(<span class="str">'name'</span>);
+<span class="kw">await</span> col.<span class="fn">createTextIndex</span>(<span class="str">'description'</span>);
+
+<span class="cmt">// Search satu kata</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>({ <span class="acc">$text</span>: <span class="str">'budi'</span> });
+
+<span class="cmt">// Search multi kata — AND semantics: semua kata harus ada</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>({ <span class="acc">$text</span>: <span class="str">'budi jakarta'</span> });
+
+<span class="cmt">// Kombinasi dengan filter lain</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> col.<span class="fn">find</span>({ <span class="acc">$text</span>: <span class="str">'santoso'</span>, city: <span class="str">'Jakarta'</span> });
+
+<span class="cmt">// findOne dengan $text</span>
+<span class="kw">const</span> doc = <span class="kw">await</span> col.<span class="fn">findOne</span>({ <span class="acc">$text</span>: <span class="str">'alice'</span> });<div class="pre-label">fts.ts</div></pre>
+
+            <div class="note info">
+                <span class="note-icon">📚</span>
+                <div>
+                    Tokenizer: lowercase → split by non-alphanumeric → filter token &lt; 2 karakter.
+                    Query "budi jakarta" akan mencari dokumen yang memiliki SEMUA token: ["budi", "jakarta"].
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── AGGREGATION ─── -->
+        <section id="aggregate">
+            <h2><span class="icon blue">📊</span>Aggregation Pipeline</h2>
+            <p class="section-lead">Pipeline agregasi yang kompatibel dengan MongoDB — transformasi data berlapis.</p>
+
+            <pre><span class="cmt">// Contoh lengkap: group by city, hitung total & rata-rata points</span>
+<span class="kw">const</span> report = <span class="kw">await</span> col.<span class="fn">aggregate</span>([
+  { <span class="acc">$match</span>:   { active: <span class="kw">true</span>, city: { <span class="acc">$in</span>: [<span class="str">'Jakarta'</span>, <span class="str">'Bandung'</span>] } } },
+  { <span class="acc">$group</span>:   { _id: <span class="str">'$city'</span>,
+                 total: { <span class="acc">$sum</span>: <span class="str">'$points'</span> },
+                 avg:   { <span class="acc">$avg</span>: <span class="str">'$points'</span> },
+                 count: { <span class="acc">$sum</span>: <span class="num">1</span> } } },
+  { <span class="acc">$sort</span>:    { total: -<span class="num">1</span> } },
+  { <span class="acc">$limit</span>:   <span class="num">5</span> },
+  { <span class="acc">$project</span>: { _id: <span class="num">1</span>, total: <span class="num">1</span>, count: <span class="num">1</span> } },
+]);<div class="pre-label">aggregation.ts</div></pre>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Stage</th>
+                            <th>Deskripsi</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>$match</code></td>
+                            <td>Filter dokumen (gunakan index jika ada)</td>
+                        </tr>
+                        <tr>
+                            <td><code>$group</code></td>
+                            <td>Group by field, dengan accumulator: <code>$sum</code> <code>$avg</code>
+                                <code>$min</code> <code>$max</code> <code>$count</code> <code>$first</code>
+                                <code>$last</code> <code>$push</code> <code>$addToSet</code>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><code>$sort</code></td>
+                            <td>Sorting hasil</td>
+                        </tr>
+                        <tr>
+                            <td><code>$limit</code> <code>$skip</code></td>
+                            <td>Paginasi</td>
+                        </tr>
+                        <tr>
+                            <td><code>$project</code></td>
+                            <td>Pilih/exclude field</td>
+                        </tr>
+                        <tr>
+                            <td><code>$unwind</code></td>
+                            <td>Expand array field menjadi banyak dokumen</td>
+                        </tr>
+                        <tr>
+                            <td><code>$lookup</code></td>
+                            <td>Join cross-collection</td>
+                        </tr>
+                        <tr>
+                            <td><code>$addFields</code></td>
+                            <td>Tambah computed fields</td>
+                        </tr>
+                        <tr>
+                            <td><code>$replaceRoot</code></td>
+                            <td>Ganti root dokumen dengan sub-dokumen</td>
+                        </tr>
+                        <tr>
+                            <td><code>$count</code></td>
+                            <td>Hitung jumlah dokumen</td>
+                        </tr>
+                        <tr>
+                            <td><code>$bucket</code></td>
+                            <td>Histogram / binning</td>
+                        </tr>
+                        <tr>
+                            <td><code>$facet</code></td>
+                            <td>Multi-pipeline paralel dalam satu stage</td>
+                        </tr>
+                        <tr>
+                            <td><code>$densify</code></td>
+                            <td>Isi gap dalam sequence data</td>
+                        </tr>
+                        <tr>
+                            <td><code>$setWindowFields</code></td>
+                            <td>Window functions: <code>$rank</code> <code>$denseRank</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <pre><span class="cmt">// Cross-collection JOIN</span>
+<span class="kw">const</span> joined = <span class="kw">await</span> col.<span class="fn">aggregate</span>([
+  { <span class="acc">$lookup</span>: {
+    from: <span class="str">'orders'</span>, localField: <span class="str">'_id'</span>,
+    foreignField: <span class="str">'userId'</span>, as: <span class="str">'orders'</span>
+  } },
+]);
+
+<span class="cmt">// Histogram umur</span>
+<span class="kw">const</span> histogram = <span class="kw">await</span> col.<span class="fn">aggregate</span>([
+  { <span class="acc">$bucket</span>: { groupBy: <span class="str">'$age'</span>, boundaries: [<span class="num">0</span>,<span class="num">18</span>,<span class="num">30</span>,<span class="num">50</span>,<span class="num">100</span>], default: <span class="str">'other'</span> } },
+]);
+
+<span class="cmt">// Ranking per-city berdasarkan score</span>
+<span class="kw">const</span> ranked = <span class="kw">await</span> col.<span class="fn">aggregate</span>([
+  { <span class="acc">$setWindowFields</span>: {
+    partitionBy: <span class="str">'$city'</span>, sortBy: { score: -<span class="num">1</span> },
+    output: { rank: { <span class="acc">$rank</span>: {} } },
+  }},
+]);<div class="pre-label">aggregation-advanced.ts</div></pre>
+        </section>
+
+        <!-- ─── TRANSACTION ─── -->
+        <section id="transaction">
+            <h2><span class="icon purple">💳</span>Transaksi & Savepoint</h2>
+
+            <pre><span class="cmt">// MVCC Snapshot Isolation — reader tidak diblokir writer</span>
+<span class="kw">const</span> tx = db.<span class="fn">beginTransaction</span>();
+
+<span class="cmt">// Tambahkan operasi ke transaksi</span>
+tx.<span class="fn">insert</span>(col1, { name: <span class="str">'Budi'</span> });
+tx.<span class="fn">update</span>(col2, { _id: id }, { <span class="acc">$inc</span>: { balance: -<span class="num">100</span> } });
+
+<span class="cmt">// Commit — auto-rollback jika ada error</span>
+<span class="kw">await</span> tx.<span class="fn">commit</span>();
+
+<span class="cmt">// ─────────────────────────────────────────</span>
+<span class="cmt">// Savepoint (v4.0) — rollback parsial</span>
+<span class="kw">const</span> tx = db.<span class="fn">beginTransaction</span>();
+
+tx.<span class="fn">insert</span>(col, { _id: <span class="str">'a'</span>, balance: <span class="num">100</span> });
+tx.<span class="fn">insert</span>(col, { _id: <span class="str">'b'</span>, balance: <span class="num">200</span> });
+
+tx.<span class="fn">savepoint</span>(<span class="str">'sebelum-risky'</span>);         <span class="cmt">// buat savepoint</span>
+
+tx.<span class="fn">insert</span>(col, { _id: <span class="str">'c'</span>, balance: <span class="num">999</span> });  <span class="cmt">// operasi yang mungkin dibatalkan</span>
+
+<span class="kw">await</span> tx.<span class="fn">rollbackTo</span>(<span class="str">'sebelum-risky'</span>);  <span class="cmt">// batalkan hanya 'c'</span>
+
+<span class="kw">await</span> tx.<span class="fn">commit</span>();  <span class="cmt">// commit hanya 'a' dan 'b'</span><div class="pre-label">transaction.ts</div></pre>
+        </section>
+
+        <!-- ─── SCHEMA ─── -->
+        <section id="schema">
+            <h2><span class="icon green">📐</span>Schema Validation</h2>
+
+            <pre><span class="kw">import</span> { <span class="cls">SchemaValidator</span>, <span class="fn">field</span> } <span class="kw">from</span> <span class="str">'ovndb'</span>;
+
+<span class="kw">const</span> schema = <span class="kw">new</span> <span class="cls">SchemaValidator</span>({
+  name:   <span class="fn">field</span>(<span class="str">'string'</span>).<span class="fn">required</span>().<span class="fn">minLength</span>(<span class="num">2</span>).<span class="fn">maxLength</span>(<span class="num">100</span>).<span class="fn">build</span>(),
+  phone:  <span class="fn">field</span>(<span class="str">'string'</span>).<span class="fn">required</span>().<span class="fn">pattern</span>(<span class="str">/^628\d{8,12}$/</span>).<span class="fn">build</span>(),
+  points: <span class="fn">field</span>(<span class="str">'number'</span>).<span class="fn">min</span>(<span class="num">0</span>).<span class="fn">max</span>(<span class="num">1_000_000</span>).<span class="fn">default</span>(<span class="num">0</span>).<span class="fn">build</span>(),
+  tags:   <span class="fn">field</span>(<span class="str">'array'</span>).<span class="fn">maxItems</span>(<span class="num">20</span>).<span class="fn">items</span>(<span class="fn">field</span>(<span class="str">'string'</span>).<span class="fn">build</span>()).<span class="fn">build</span>(),
+  role:   <span class="fn">field</span>(<span class="str">'string'</span>).<span class="fn">enum</span>(<span class="str">'admin'</span>, <span class="str">'user'</span>, <span class="str">'guest'</span>).<span class="fn">build</span>(),
+});
+
+<span class="cmt">// Soft validation (tidak throw)</span>
+<span class="kw">const</span> { ok, errors } = schema.<span class="fn">validate</span>(doc);
+
+<span class="cmt">// Hard validation (throw ValidationError)</span>
+schema.<span class="fn">validateOrThrow</span>(doc);
+
+<span class="cmt">// Apply default values</span>
+schema.<span class="fn">applyDefaults</span>(doc);<div class="pre-label">schema.ts</div></pre>
+
+            <div class="note info">
+                <span class="note-icon">🛡️</span>
+                <div><strong>ReDoS Protection:</strong> Pattern regex divalidasi sebelum dikompilasi. Pattern dengan
+                    backreference atau quantifier bersarang yang bisa menyebabkan catastrophic backtracking akan
+                    ditolak.</div>
+            </div>
+        </section>
+
+        <!-- ─── CRYPTO ─── -->
+        <section id="crypto">
+            <h2><span class="icon orange">🔒</span>Enkripsi AES-256-GCM</h2>
+
+            <pre><span class="kw">import</span> { <span class="cls">OvnDB</span>, <span class="fn">cryptoFromPassphrase</span> } <span class="kw">from</span> <span class="str">'ovndb'</span>;
+
+<span class="kw">const</span> db  = <span class="kw">await</span> <span class="cls">OvnDB</span>.<span class="fn">open</span>(<span class="str">'./data'</span>);
+<span class="kw">const</span> key = <span class="kw">await</span> <span class="fn">cryptoFromPassphrase</span>(process.env.<span class="acc">DB_KEY</span>!, <span class="str">'./data'</span>);
+
+<span class="cmt">// CollectionV2 — enkripsi per-record otomatis</span>
+<span class="kw">const</span> users = <span class="kw">await</span> db.<span class="fn">collectionV2</span>&lt;<span class="cls">User</span>&gt;(<span class="str">'users'</span>, {
+  crypto:  key,
+  indexes: [{ field: <span class="str">'phone'</span>, unique: <span class="kw">true</span> }],
+});
+
+<span class="cmt">// API identik dengan Collection biasa — transparan</span>
+<span class="kw">const</span> user = <span class="kw">await</span> users.<span class="fn">findOne</span>({ phone: <span class="str">'628123'</span> });
+
+<span class="cmt">// Key rotation — re-encrypt semua record dengan key baru</span>
+<span class="kw">const</span> newKey = <span class="kw">await</span> <span class="fn">cryptoFromPassphrase</span>(<span class="str">'new-passphrase'</span>, <span class="str">'./data'</span>, <span class="num">1</span>);
+<span class="kw">await</span> users.<span class="fn">rotateEncryptionKey</span>(newKey);<div class="pre-label">crypto.ts</div></pre>
+
+            <h3>Field-Level Encryption</h3>
+            <pre><span class="kw">import</span> { <span class="cls">CryptoLayer</span>, <span class="cls">FieldCrypto</span> } <span class="kw">from</span> <span class="str">'ovndb'</span>;
+
+<span class="kw">const</span> layer = <span class="cls">CryptoLayer</span>.<span class="fn">fromKey</span>(cryptoKey, <span class="num">0</span>);
+<span class="kw">const</span> fc    = <span class="kw">new</span> <span class="cls">FieldCrypto</span>(layer);
+
+<span class="cmt">// Encrypt hanya field sensitif — field lain tetap queryable</span>
+<span class="kw">const</span> encrypted = fc.<span class="fn">encryptFields</span>(doc, [<span class="str">'ssn'</span>, <span class="str">'phone'</span>]);
+<span class="kw">const</span> decrypted = fc.<span class="fn">decryptFields</span>(encrypted);<div class="pre-label">field-crypto.ts</div></pre>
+        </section>
+
+        <!-- ─── TTL ─── -->
+        <section id="ttl">
+            <h2><span class="icon blue">⏱️</span>TTL Index</h2>
+            <p class="section-lead">Auto-expiry dokumen berdasarkan timestamp field — cocok untuk session, cache, token.
+            </p>
+
+            <pre><span class="kw">import</span> { <span class="cls">TTLIndex</span> } <span class="kw">from</span> <span class="str">'ovndb'</span>;
+
+<span class="kw">const</span> sessions = <span class="kw">await</span> db.<span class="fn">collection</span>(<span class="str">'sessions'</span>);
+<span class="kw">const</span> ttl      = <span class="kw">new</span> <span class="cls">TTLIndex</span>(sessions, {
+  field:         <span class="str">'expiresAt'</span>,
+  checkInterval: <span class="num">60_000</span>,    <span class="cmt">// cek setiap 1 menit</span>
+  batchSize:     <span class="num">1_000</span>,     <span class="cmt">// hapus max 1000 per cycle</span>
+  onPurge:       (deleted, ms) => console.<span class="fn">log</span>(<span class="str">`Purged ${deleted} in ${ms}ms`</span>),
+});
+ttl.<span class="fn">start</span>();
+
+<span class="cmt">// Insert session dengan TTL 30 menit</span>
+<span class="kw">await</span> sessions.<span class="fn">insertOne</span>({
+  sessionId: <span class="str">'abc123'</span>,
+  userId:    <span class="str">'u1'</span>,
+  expiresAt: <span class="cls">TTLIndex</span>.<span class="fn">expiresIn</span>(<span class="num">30</span>, <span class="str">'minutes'</span>),
+});
+
+<span class="cmt">// Stop saat shutdown</span>
+ttl.<span class="fn">stop</span>();<div class="pre-label">ttl.ts</div></pre>
+        </section>
+
+        <!-- ─── CHANGE STREAM ─── -->
+        <section id="changestream">
+            <h2><span class="icon purple">📡</span>Change Stream (CDC)</h2>
+            <p class="section-lead">Event-driven Change Data Capture — dengarkan perubahan data secara real-time.</p>
+
+            <pre><span class="kw">const</span> stream = users.<span class="fn">watch</span>({
+  filter: { active: <span class="kw">true</span> },  <span class="cmt">// hanya emit event untuk dokumen yang match</span>
+});
+
+stream.<span class="fn">on</span>(<span class="str">'insert'</span>,  event => io.<span class="fn">emit</span>(<span class="str">'newUser'</span>, event.fullDocument));
+stream.<span class="fn">on</span>(<span class="str">'update'</span>,  event => cache.<span class="fn">invalidate</span>(event.documentKey._id));
+stream.<span class="fn">on</span>(<span class="str">'delete'</span>,  event => <span class="fn">cleanup</span>(event.documentKey._id));
+stream.<span class="fn">on</span>(<span class="str">'change'</span>,  event => console.<span class="fn">log</span>(event.operationType));
+
+<span class="cmt">// Unsubscribe</span>
+stream.<span class="fn">close</span>();<div class="pre-label">change-stream.ts</div></pre>
+        </section>
+
+        <!-- ─── RELATION ─── -->
+        <section id="relation">
+            <h2><span class="icon green">🔗</span>RelationManager</h2>
+            <p class="section-lead">Cross-collection JOIN dan populate — seperti Mongoose populate tapi lebih efisien.
+            </p>
+
+            <pre><span class="kw">import</span> { <span class="cls">RelationManager</span> } <span class="kw">from</span> <span class="str">'ovndb'</span>;
+
+<span class="kw">const</span> rel = <span class="kw">new</span> <span class="cls">RelationManager</span>();
+rel.<span class="fn">register</span>(<span class="str">'users'</span>,  usersCol);
+rel.<span class="fn">register</span>(<span class="str">'groups'</span>, groupsCol);
+
+<span class="cmt">// Populate satu dokumen</span>
+<span class="kw">const</span> msg  = <span class="kw">await</span> messages.<span class="fn">findOne</span>({ _id: id });
+<span class="kw">const</span> full = <span class="kw">await</span> rel.<span class="fn">populate</span>(msg, { userId: <span class="str">'users'</span>, groupId: <span class="str">'groups'</span> });
+<span class="cmt">// full.userId sekarang User object, bukan string ID</span>
+
+<span class="cmt">// Batch populate — jauh lebih efisien dari loop populate()</span>
+<span class="kw">const</span> msgs = <span class="kw">await</span> messages.<span class="fn">find</span>({ groupId: <span class="str">'xyz'</span> });
+<span class="kw">const</span> pop  = <span class="kw">await</span> rel.<span class="fn">populateMany</span>(msgs, { userId: <span class="str">'users'</span> });<div class="pre-label">relation.ts</div></pre>
+        </section>
+
+        <!-- ─── IMPORT/EXPORT ─── -->
+        <section id="importexport">
+            <h2><span class="icon blue">📦</span>Import / Export (v4.0)</h2>
+
+            <pre><span class="cmt">// Export ke NDJSON (streaming, memory-efficient)</span>
+<span class="kw">const</span> count = <span class="kw">await</span> col.<span class="fn">exportTo</span>(<span class="str">'./backup.ndjson'</span>);
+
+<span class="cmt">// Export ke JSON array</span>
+<span class="kw">const</span> count = <span class="kw">await</span> col.<span class="fn">exportTo</span>(<span class="str">'./backup.json'</span>, { format: <span class="str">'json'</span> });
+
+<span class="cmt">// Export dengan projection (hanya field tertentu)</span>
+<span class="kw">const</span> count = <span class="kw">await</span> col.<span class="fn">exportTo</span>(<span class="str">'./names.ndjson'</span>, {
+  projection: { name: <span class="num">1</span>, city: <span class="num">1</span> },
+});
+
+<span class="cmt">// Import dari NDJSON</span>
+<span class="kw">const</span> result = <span class="kw">await</span> col.<span class="fn">importFrom</span>(<span class="str">'./backup.ndjson'</span>);
+<span class="cmt">// result = { total: 1000, inserted: 1000, updated: 0, errors: [] }</span>
+
+<span class="cmt">// Import dengan upsert (update jika _id sudah ada)</span>
+<span class="kw">const</span> result = <span class="kw">await</span> col.<span class="fn">importFrom</span>(<span class="str">'./data.ndjson'</span>, { mode: <span class="str">'upsert'</span> });
+
+<span class="cmt">// Import dengan error recovery</span>
+<span class="kw">const</span> result = <span class="kw">await</span> col.<span class="fn">importFrom</span>(<span class="str">'./data.json'</span>, {
+  format: <span class="str">'json'</span>,
+  continueOnError: <span class="kw">true</span>,
+});
+console.<span class="fn">log</span>(<span class="str">`${result.inserted} inserted, ${result.errors.length} errors`</span>);<div class="pre-label">import-export.ts</div></pre>
+        </section>
+
+        <!-- ─── MIGRATION ─── -->
+        <section id="migration">
+            <h2><span class="icon orange">🔄</span>Migration</h2>
+
+            <pre><span class="kw">import</span> { <span class="cls">MigrationRunner</span> } <span class="kw">from</span> <span class="str">'ovndb'</span>;
+
+<span class="kw">const</span> migration = <span class="kw">new</span> <span class="cls">MigrationRunner</span>(db, {
+  version: <span class="num">2</span>,
+  up: <span class="kw">async</span> (db) => {
+    <span class="kw">const</span> users = <span class="kw">await</span> db.<span class="fn">collection</span>(<span class="str">'users'</span>);
+    <span class="kw">await</span> users.<span class="fn">updateMany</span>({}, { <span class="acc">$set</span>: { tier: <span class="str">'free'</span> } });
+  },
+});
+
+<span class="cmt">// Hanya dijalankan jika versi saat ini &lt; target version</span>
+<span class="kw">await</span> migration.<span class="fn">run</span>();<div class="pre-label">migration.ts</div></pre>
+        </section>
+
+        <!-- ─── OBSERVABILITY ─── -->
+        <section id="observability">
+            <h2><span class="icon purple">📈</span>Observability</h2>
+
+            <pre><span class="kw">import</span> { <span class="fn">getObservability</span> } <span class="kw">from</span> <span class="str">'ovndb'</span>;
+
+<span class="kw">const</span> obs = <span class="fn">getObservability</span>({ slowQueryThresholdMs: <span class="num">50</span> });
+
+<span class="cmt">// Wrap operasi dengan auto-timing</span>
+<span class="kw">const</span> docs = <span class="kw">await</span> obs.<span class="fn">measure</span>(<span class="str">'find'</span>, <span class="str">'users'</span>, () =>
+  users.<span class="fn">find</span>({ city: <span class="str">'Jakarta'</span> })
+);
+
+<span class="cmt">// Report lengkap</span>
+<span class="kw">const</span> report = obs.<span class="fn">report</span>();
+console.<span class="fn">log</span>(report.collections[<span class="num">0</span>].p99Ms);  <span class="cmt">// P99 per operasi</span>
+
+<span class="cmt">// Prometheus endpoint</span>
+app.<span class="fn">get</span>(<span class="str">'/metrics'</span>, (req, res) => {
+  res.<span class="fn">type</span>(<span class="str">'text/plain'</span>).<span class="fn">send</span>(obs.<span class="fn">toPrometheus</span>());
+});<div class="pre-label">observability.ts</div></pre>
+        </section>
+
+        <div class="sep"></div>
+
+        <!-- ─── RECORD FORMAT ─── -->
+        <section id="record-format">
+            <h2><span class="icon green">🔢</span>Format Record On-disk</h2>
+            <p class="section-lead">Setiap record di segment file disimpan dengan format berikut:</p>
+
+            <div class="record-format">
+                <div class="rec-field status">
+                    <div class="rec-field-size">1 byte</div>
+                    <div class="rec-field-name">status</div>
+                    <div class="rec-field-desc">0x01 = ACTIVE<br />0x00 = DELETED</div>
+                </div>
+                <div class="rec-field txid">
+                    <div class="rec-field-size">8 bytes</div>
+                    <div class="rec-field-name">txId</div>
+                    <div class="rec-field-desc">MVCC version<br />(BigInt uint64 LE)</div>
+                </div>
+                <div class="rec-field">
+                    <div class="rec-field-size">4 bytes</div>
+                    <div class="rec-field-name">dataLen</div>
+                    <div class="rec-field-desc">payload length<br />(uint32 LE)</div>
+                </div>
+                <div class="rec-field data">
+                    <div class="rec-field-size">N bytes</div>
+                    <div class="rec-field-name">data</div>
+                    <div class="rec-field-desc">JSON payload<br />(atau ciphertext jika enkripsi aktif)</div>
+                </div>
+                <div class="rec-field crc">
+                    <div class="rec-field-size">4 bytes</div>
+                    <div class="rec-field-name">CRC32</div>
+                    <div class="rec-field-desc">checksum semua field sebelumnya</div>
+                </div>
+            </div>
+
+            <p>Total overhead per record: <code>1 + 8 + 4 + 4 = 17 bytes</code> (di luar payload data).</p>
+        </section>
+
+        <!-- ─── FILE STRUCTURE ─── -->
+        <section id="filestructure">
+            <h2><span class="icon blue">📁</span>Struktur File</h2>
+            <div class="arch-box">
+                <div><span class="arch-root">data/</span></div>
+                <div><span class="arch-branch">└──</span> <span class="arch-node">users/</span> <span class="arch-sub">←
+                        satu direktori per collection</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;├──</span> <span
+                        class="arch-node">users.manifest.json</span> <span class="arch-sub">← daftar segment + metadata
+                        (SHA-256 / HMAC)</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;├──</span> <span
+                        class="arch-node">users.seg-0000.ovn</span> <span class="arch-sub">← segment 0 (max 512
+                        MB)</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;├──</span> <span
+                        class="arch-node">users.seg-0001.ovn</span> <span class="arch-sub">← segment 1
+                        (auto-created)</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;├──</span> <span
+                        class="arch-node">users.ovni</span> <span class="arch-sub">← on-disk B+ Tree index (page
+                        file)</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;├──</span> <span
+                        class="arch-node">users.wal</span> <span class="arch-sub">← Write-Ahead Log (dibersihkan setelah
+                        flush)</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;├──</span> <span
+                        class="arch-node">users.idx.city</span> <span class="arch-sub">← secondary index field
+                        'city'</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;├──</span> <span
+                        class="arch-node">users.idx.city,active</span> <span class="arch-sub">← compound index
+                        ['city','active'] (v4.0)</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;├──</span> <span
+                        class="arch-node">users.fts.name.json</span> <span class="arch-sub">← FTS inverted index field
+                        'name' (v4.0)</span></div>
+                <div><span class="arch-branch">&nbsp;&nbsp;&nbsp;&nbsp;└──</span> <span class="arch-node">.salt</span>
+                    <span class="arch-sub">← PBKDF2 salt (jika enkripsi aktif)</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── SECURITY ─── -->
+        <section id="security">
+            <h2><span class="icon orange">🛡️</span>Keamanan</h2>
+            <p class="section-lead">Defense-in-depth security — berlapis, bukan single point of protection.</p>
+
+            <div class="feature-list">
+                <div class="feature-chip"><span class="dot" style="background:var(--accent)"></span>Prototype pollution
+                    protection</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent2)"></span>ReDoS protection
+                    (regex)</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent3)"></span>Path traversal
+                    prevention</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent4)"></span>Document size
+                    limits</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent)"></span>Field depth limits
+                </div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent2)"></span>Query filter
+                    validation</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent3)"></span>Backup confinement
+                </div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent4)"></span>CSPRNG ID
+                    generation</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent)"></span>AES-256-GCM
+                    encryption</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent2)"></span>HMAC-SHA256
+                    manifest integrity</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent3)"></span>__proto__ injection
+                    detection</div>
+                <div class="feature-chip"><span class="dot" style="background:var(--accent4)"></span>File lock (anti
+                    multi-process)</div>
+            </div>
+
+            <h3>HMAC Manifest Integrity</h3>
+            <pre><span class="kw">import</span> crypto <span class="kw">from</span> <span class="str">'crypto'</span>;
+
+<span class="cmt">// Derive integrity key dari master key (untuk database terenkripsi)</span>
+<span class="kw">const</span> masterKey     = <span class="kw">await</span> <span class="fn">cryptoFromPassphrase</span>(pass, dir);
+<span class="kw">const</span> integrityKey  = crypto.<span class="fn">createHash</span>(<span class="str">'sha256'</span>)
+  .<span class="fn">update</span>(masterKey.key)
+  .<span class="fn">update</span>(<span class="str">'ovndb-manifest-hmac'</span>)
+  .<span class="fn">digest</span>();
+
+<span class="kw">const</span> db = <span class="kw">await</span> <span class="cls">OvnDB</span>.<span class="fn">open</span>(<span class="str">'./data'</span>, { integrityKey });
+<span class="cmt">// Manifest sekarang dilindungi HMAC-SHA256 (bukan SHA-256 plain)</span>
+<span class="cmt">// HMAC mendeteksi modifikasi disengaja, bukan hanya korupsi acak</span><div class="pre-label">hmac-integrity.ts</div></pre>
+        </section>
+
+        <!-- ─── PERFORMANCE ─── -->
+        <section id="performance">
+            <h2><span class="icon purple">⚡</span>Performa</h2>
+            <p class="section-lead">Diukur pada NVMe SSD, Node.js v22, 100K records.</p>
+
+            <div class="perf-grid">
+                <div class="perf-row">
+                    <div class="perf-label">insertOne</div>
+                    <div class="perf-bar-wrap">
+                        <div class="perf-bar" style="width:57%"></div>
+                    </div>
+                    <div class="perf-val">~20,000 ops/s</div>
+                </div>
+                <div class="perf-row">
+                    <div class="perf-label">findOne (cache hit)</div>
+                    <div class="perf-bar-wrap">
+                        <div class="perf-bar" style="width:100%"></div>
+                    </div>
+                    <div class="perf-val">~35,000 ops/s</div>
+                </div>
+                <div class="perf-row">
+                    <div class="perf-label">updateOne</div>
+                    <div class="perf-bar-wrap">
+                        <div class="perf-bar" style="width:43%"></div>
+                    </div>
+                    <div class="perf-val">~15,000 ops/s</div>
+                </div>
+                <div class="perf-row">
+                    <div class="perf-label">deleteOne</div>
+                    <div class="perf-bar-wrap">
+                        <div class="perf-bar" style="width:63%"></div>
+                    </div>
+                    <div class="perf-val">~22,000 ops/s</div>
+                </div>
+                <div class="perf-row">
+                    <div class="perf-label">Full scan (100K docs)</div>
+                    <div class="perf-bar-wrap">
+                        <div class="perf-bar"
+                            style="width:35%; background: linear-gradient(90deg,var(--accent3),var(--accent4))"></div>
+                    </div>
+                    <div class="perf-val">~120 ms</div>
+                </div>
+                <div class="perf-row">
+                    <div class="perf-label">aggregate ($match+$group)</div>
+                    <div class="perf-bar-wrap">
+                        <div class="perf-bar"
+                            style="width:45%; background: linear-gradient(90deg,var(--accent3),var(--accent4))"></div>
+                    </div>
+                    <div class="perf-val">~90 ms</div>
+                </div>
+            </div>
+
+            <pre><span class="cmt"># Jalankan benchmark sendiri</span>
+npm run bench          <span class="cmt"># 10K records</span>
+npm run bench:50k      <span class="cmt"># 50K records</span>
+BENCH_N=500000 npm run bench  <span class="cmt"># 500K records</span><div class="pre-label">benchmark</div></pre>
+        </section>
+
+        <!-- ─── ENV ─── -->
+        <section id="env">
+            <h2><span class="icon green">🌿</span>Environment Variables</h2>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Variable</th>
+                            <th>Default</th>
+                            <th>Deskripsi</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>OVNDB_LOG</code></td>
+                            <td><code>info</code></td>
+                            <td>Log level: <code>debug</code> <code>info</code> <code>warn</code> <code>error</code>
+                                <code>silent</code>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><code>NODE_ENV</code></td>
+                            <td>—</td>
+                            <td>Set <code>production</code> untuk JSON log output</td>
+                        </tr>
+                        <tr>
+                            <td><code>BENCH_N</code></td>
+                            <td><code>10000</code></td>
+                            <td>Jumlah records untuk benchmark</td>
+                        </tr>
+                        <tr>
+                            <td><code>DB_KEY</code></td>
+                            <td>—</td>
+                            <td>Passphrase untuk enkripsi (rekomendasi via env, bukan hardcode)</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>Test Suite</h3>
+            <pre><span class="cmt"># Semua test (unit + integration + security)</span>
+npm test
+
+<span class="cmt"># Unit tests saja (cepat, pure logic)</span>
+npm run test:unit
+
+<span class="cmt"># Integration tests (pakai tmpdir)</span>
+npm run test:integration
+
+<span class="cmt"># Security tests (25+ skenario)</span>
+npm run test:security<div class="pre-label">testing</div></pre>
+
+            <div class="note success">
+                <span class="note-icon">✅</span>
+                <div>
+                    <strong>Coverage:</strong> CRC32 · LRU Cache · Filter Engine · Schema Validation · Aggregation
+                    Pipeline · AES Crypto · MVCC · ID Generator · RelationManager · CRUD + Compound Index + FTS +
+                    Import/Export · Transactions + Savepoints · 25+ Security scenarios
+                </div>
+            </div>
+        </section>
+
+        <div class="sep"></div>
+
+        <div
+            style="text-align:center; padding: 40px 0 60px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 12px;">
+            OvnDB v4.0.0 · MIT License · Pure TypeScript · Zero Dependencies<br />
+            <span style="color: var(--accent); margin-top: 6px; display:inline-block;">Made with ❤️ in Indonesia
+                🇮🇩</span>
+        </div>
+
+    </main>
+
+    <script>
+        // Active nav link on scroll
+        const sections = document.querySelectorAll('section[id], .hero[id]');
+        const links = document.querySelectorAll('nav a');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(e => {
+                if (e.isIntersecting) {
+                    links.forEach(l => l.classList.remove('active'));
+                    const active = document.querySelector(`nav a[href="#${e.target.id}"]`);
+                    if (active) active.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-20% 0px -75% 0px' });
+
+        sections.forEach(s => observer.observe(s));
+
+        // Fade in on scroll
+        const fadeEls = document.querySelectorAll('.why-card, .compare-col, h2, h3, pre, .note, .table-wrap, .perf-grid, .record-format, .btree-vis, .arch-box');
+        fadeEls.forEach(el => el.classList.add('fade-in'));
+
+        const visObserver = new IntersectionObserver((entries) => {
+            entries.forEach(e => {
+                if (e.isIntersecting) { e.target.classList.add('visible'); visObserver.unobserve(e.target); }
+            });
+        }, { rootMargin: '0px 0px -60px 0px' });
+
+        fadeEls.forEach(el => visObserver.observe(el));
+    </script>
+</body>
+
+</html>
