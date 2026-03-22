@@ -656,4 +656,4 @@ npm run test:security
 
 ## License
 
-MIT
+[MIT](LICENCE) © 2026 Natz6N
