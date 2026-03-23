@@ -58,7 +58,7 @@ export class RelationManager {
   ): Promise<T & Record<string, unknown>> {
     const result = { ...doc } as Record<string, unknown>;
     for (const [field, colName] of Object.entries(relations)) {
-      const id  = result[field];
+      const id = result[field];
       if (typeof id !== 'string') continue;
       const col = this._col(colName);
       const ref = await col.findOne({ _id: id });
@@ -104,8 +104,8 @@ export class RelationManager {
     // Batch-fetch semua dokumen yang diperlukan
     const resolved: Record<string, Map<string, OvnDocument>> = {};
     for (const [colName, ids] of Object.entries(idSets)) {
-      const col   = this._col(colName);
-      const map   = new Map<string, OvnDocument>();
+      const col = this._col(colName);
+      const map = new Map<string, OvnDocument>();
       const idArr = [...ids];
       if (idArr.length > 0) {
         const fetched = await col.find({ _id: { $in: idArr } });
@@ -118,7 +118,7 @@ export class RelationManager {
     return docs.map(doc => {
       const result = { ...doc } as Record<string, unknown>;
       for (const [field, colName] of Object.entries(relations)) {
-        const id  = result[field];
+        const id = result[field];
         const map = resolved[colName]!;
         if (typeof id === 'string') {
           result[field] = map.get(id) ?? id;
