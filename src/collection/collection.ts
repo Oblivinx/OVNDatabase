@@ -629,11 +629,16 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   }
 
   protected _parse(buf: Buffer): T | null {
-    try { return JSON.parse(buf.toString('utf8')) as T; } catch { return null; }
+    try {
+      return JSON.parse(buf.toString('utf8'), (_, v) => {
+        if (v && typeof v === 'object' && typeof v.$bigint === 'string') return BigInt(v.$bigint);
+        return v;
+      }) as T;
+    } catch { return null; }
   }
 
   protected _serialize(doc: T): Buffer {
-    return Buffer.from(JSON.stringify(doc), 'utf8');
+    return Buffer.from(JSON.stringify(doc, (_, v) => typeof v === 'bigint' ? { $bigint: v.toString() } : v), 'utf8');
   }
 
   private _emitChange(event: ChangeEvent<T>): void {

@@ -643,14 +643,18 @@ export class Collection {
     }
     _parse(buf) {
         try {
-            return JSON.parse(buf.toString('utf8'));
+            return JSON.parse(buf.toString('utf8'), (_, v) => {
+                if (v && typeof v === 'object' && typeof v.$bigint === 'string')
+                    return BigInt(v.$bigint);
+                return v;
+            });
         }
         catch {
             return null;
         }
     }
     _serialize(doc) {
-        return Buffer.from(JSON.stringify(doc), 'utf8');
+        return Buffer.from(JSON.stringify(doc, (_, v) => typeof v === 'bigint' ? { $bigint: v.toString() } : v), 'utf8');
     }
     _emitChange(event) {
         if (this.streams.count > 0)
