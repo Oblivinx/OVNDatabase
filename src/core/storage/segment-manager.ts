@@ -398,7 +398,7 @@ export class SegmentManager {
   // ── Compaction ────────────────────────────────────────────
 
   async autoCompact(
-    onPointerMoved: (oldPtr: RecordPointer, newPtr: RecordPointer) => void,
+    onPointerMoved: (oldPtr: RecordPointer, newPtr: RecordPointer, data: Buffer) => void,
   ): Promise<number[]> {
     const compacted: number[] = [];
     for (const seg of [...this.manifest.segments]) {
@@ -416,7 +416,7 @@ export class SegmentManager {
 
   private async _compactSegment(
     segId: number,
-    onPointerMoved: (old: RecordPointer, newPtr: RecordPointer) => void,
+    onPointerMoved: (old: RecordPointer, newPtr: RecordPointer, data: Buffer) => void,
   ): Promise<void> {
     const tmpPath = this._segPath(segId) + '.compact';
     // SECURITY: mode 0o600 — temp compact file berisi data yang sama dengan segment aktif
@@ -436,7 +436,7 @@ export class SegmentManager {
         segmentId: segId, offset: newOffset,
         totalSize: rec.length, dataSize: payload.length, txId: ptr.txId,
       };
-      onPointerMoved(ptr, newPtr);
+      onPointerMoved(ptr, newPtr, data);
       newOffset += rec.length;
     }
     fs.fdatasyncSync(tmpFd);

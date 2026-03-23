@@ -390,7 +390,7 @@ export class SegmentManager {
                 segmentId: segId, offset: newOffset,
                 totalSize: rec.length, dataSize: payload.length, txId: ptr.txId,
             };
-            onPointerMoved(ptr, newPtr);
+            onPointerMoved(ptr, newPtr, data);
             newOffset += rec.length;
         }
         fs.fdatasyncSync(tmpFd);

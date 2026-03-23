@@ -406,15 +406,11 @@ export class StorageEngine {
      * Karena SegmentManager lama tidak pass _id, kita scan data untuk extract _id.
      */
     _autoCompact() {
-        this.segments.autoCompact(async (oldPtr, newPtr) => {
-            // G3: baca data dari newPtr (sudah compacted) untuk extract _id
-            // Ini tetap O(k) tapi bukan O(n²) — setiap compaction event hanya
-            // trigger satu B+ Tree set() bukan full scan
-            const raw = this.segments.readRecord(newPtr);
-            if (!raw)
-                return;
+        this.segments.autoCompact(async (oldPtr, newPtr, data) => {
+            // G3: data sudah tersedia dari _compactSegment — langsung extract _id
+            // Tidak perlu readRecord(newPtr) karena temp file belum di-rename
             try {
-                const plain = this.decryptFn ? this.decryptFn(raw) : raw;
+                const plain = this.decryptFn ? this.decryptFn(data) : data;
                 const doc = JSON.parse(plain.toString('utf8'));
                 if (doc._id)
                     await this.tree.set(doc._id, newPtr);

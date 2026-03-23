@@ -71,7 +71,7 @@ export declare class SegmentManager {
      * Gunakan ini untuk collection besar (>50K dokumen) via deleteAll().
      */
     markAllDeletedAsync(): Promise<void>;
-    autoCompact(onPointerMoved: (oldPtr: RecordPointer, newPtr: RecordPointer) => void): Promise<number[]>;
+    autoCompact(onPointerMoved: (oldPtr: RecordPointer, newPtr: RecordPointer, data: Buffer) => void): Promise<number[]>;
     private _compactSegment;
     get totalLive(): bigint;
     get totalDead(): bigint;
