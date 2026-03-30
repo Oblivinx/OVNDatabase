@@ -333,8 +333,9 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     if (!doc) return false;
     const withId = { ...replacement, _id: doc._id };
     const buf    = this._serialize(withId as T);
-    this.idxMgr.onUpdate(doc as unknown as Record<string, unknown>, withId as unknown as Record<string, unknown>);
+    // FIX: storage DULU — jika update gagal, index tidak tersentuh
     await this.engine.update(doc._id, buf);
+    this.idxMgr.onUpdate(doc as unknown as Record<string, unknown>, withId as unknown as Record<string, unknown>);
     return true;
   }
 
@@ -372,9 +373,10 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   // ── Atomic ops ────────────────────────────────────────────
 
   async findOneAndUpdate(filter: QueryFilter, spec: UpdateSpec): Promise<T | null> {
-    const updated = await this.updateOne(filter, spec);
-    if (!updated) return null;
-    return this.findOne(filter);
+    const doc = await this.findOne(filter);
+    if (!doc) return null;
+    await this.updateOne({ _id: doc._id }, spec);
+    return this.findOne({ _id: doc._id });
   }
 
   async findOneAndDelete(filter: QueryFilter): Promise<T | null> {

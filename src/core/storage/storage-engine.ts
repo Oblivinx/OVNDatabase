@@ -322,7 +322,7 @@ export class StorageEngine {
     // SECURITY: pastikan destPath tidak berada di dalam dirPath sendiri
     const resolvedDest = path.resolve(destPath);
     const resolvedSrc  = path.resolve(this.dirPath);
-    if (resolvedDest.startsWith(resolvedSrc)) {
+    if (resolvedDest.startsWith(resolvedSrc + path.sep) || resolvedDest === resolvedSrc) {
       throw new Error('[OvnDB] Backup destination tidak boleh berada di dalam direktori sumber');
     }
 
