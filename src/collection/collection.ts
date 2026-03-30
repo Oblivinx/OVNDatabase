@@ -333,8 +333,20 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     if (!doc) return false;
     const withId = { ...replacement, _id: doc._id };
     const buf    = this._serialize(withId as T);
-    this.idxMgr.onUpdate(doc as unknown as Record<string, unknown>, withId as unknown as Record<string, unknown>);
+    // FIX: storage DULU — jika update gagal, index tidak tersentuh
     await this.engine.update(doc._id, buf);
+    this.idxMgr.onUpdate(doc as unknown as Record<string, unknown>, withId as unknown as Record<string, unknown>);
+    // v4.0: update FTS indexes
+    for (const [field, ftsIdx] of this.ftsIndexes) {
+      const newVal = (withId as Record<string, unknown>)[field];
+      if (typeof newVal === 'string') ftsIdx.index(doc._id, newVal);
+      else if (ftsIdx.hasDoc(doc._id)) ftsIdx.remove(doc._id);
+    }
+    this._emitChange({
+      operationType: 'update', documentKey: { _id: doc._id }, fullDocument: withId as T,
+      updateDescription: { updatedFields: {}, removedFields: [] },
+      timestamp: Date.now(), txId: 0n,
+    });
     return true;
   }
 
@@ -372,9 +384,10 @@ export class Collection<T extends OvnDocument = OvnDocument> {
   // ── Atomic ops ────────────────────────────────────────────
 
   async findOneAndUpdate(filter: QueryFilter, spec: UpdateSpec): Promise<T | null> {
-    const updated = await this.updateOne(filter, spec);
-    if (!updated) return null;
-    return this.findOne(filter);
+    const doc = await this.findOne(filter);
+    if (!doc) return null;
+    await this.updateOne({ _id: doc._id }, spec);
+    return this.findOne({ _id: doc._id });
   }
 
   async findOneAndDelete(filter: QueryFilter): Promise<T | null> {
