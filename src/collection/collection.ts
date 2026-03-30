@@ -336,6 +336,17 @@ export class Collection<T extends OvnDocument = OvnDocument> {
     // FIX: storage DULU — jika update gagal, index tidak tersentuh
     await this.engine.update(doc._id, buf);
     this.idxMgr.onUpdate(doc as unknown as Record<string, unknown>, withId as unknown as Record<string, unknown>);
+    // v4.0: update FTS indexes
+    for (const [field, ftsIdx] of this.ftsIndexes) {
+      const newVal = (withId as Record<string, unknown>)[field];
+      if (typeof newVal === 'string') ftsIdx.index(doc._id, newVal);
+      else if (ftsIdx.hasDoc(doc._id)) ftsIdx.remove(doc._id);
+    }
+    this._emitChange({
+      operationType: 'update', documentKey: { _id: doc._id }, fullDocument: withId as T,
+      updateDescription: { updatedFields: {}, removedFields: [] },
+      timestamp: Date.now(), txId: 0n,
+    });
     return true;
   }
 
